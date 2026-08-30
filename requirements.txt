@@ -1,0 +1,10 @@
+vnstock>=4.0.5
+vnai>=2.5.6
+pandas
+numpy
+openpyxl
+xlsxwriter
+requests
+tqdm
+fastapi
+uvicorn

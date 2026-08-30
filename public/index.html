@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exceptional Trader - Bảng Xếp Hạng Vốn Hóa</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="background-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+    </div>
+
+    <div class="container">
+        <nav class="navbar glass">
+            <a href="/" class="active"><i class="fas fa-chart-bar"></i> Bảng Xếp Hạng</a>
+            <a href="/compare"><i class="fas fa-balance-scale"></i> So Sánh Chi Tiết</a>
+            <a href="/admin"><i class="fas fa-cog"></i> Quản Trị</a>
+        </nav>
+
+        <header>
+            <h1>BẢNG XẾP HẠNG TOP DOANH NGHIỆP</h1>
+            <p>Dữ liệu tổng hợp và đánh giá tự động mỗi ngày theo mô hình định lượng</p>
+        </header>
+
+        <div class="home-grid" id="home-grid">
+            <!-- Widgets for each sector will be injected here by home.js -->
+        </div>
+    </div>
+
+    <script src="home.js"></script>
+</body>
+</html>

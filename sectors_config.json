@@ -1,0 +1,45 @@
+{
+    "Ngân hàng": [
+        "VCB",
+        "BID",
+        "CTG",
+        "TCB",
+        "VPB",
+        "MBB",
+        "ACB",
+        "STB",
+        "HDB",
+        "VIB",
+        "TPB",
+        "SHB",
+        "LPB",
+        "SSB",
+        "MSB",
+        "OCB",
+        "EIB",
+        "NAB"
+    ],
+    "Bán lẻ": [
+        "MWG",
+        "PNJ",
+        "FRT",
+        "DGW",
+        "PET"
+    ],
+    "Công nghệ thông tin": [
+        "FPT",
+        "CMG",
+        "ELC",
+        "ITD"
+    ],
+    "Xây dựng và Vật liệu": [
+        "HPG",
+        "HSG",
+        "NKG",
+        "VCG",
+        "CTD",
+        "HBC",
+        "HT1",
+        "BCC"
+    ]
+}
