@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 REM Chờ 2 giây sau đó mở trình duyệt
-start /b cmd /c "ping localhost -n 3 > nul & start http://localhost:8000"
+start /b cmd /c "ping localhost -n 3 > nul & start http://127.0.0.1:8000"
 
 python main.py
 
