@@ -515,7 +515,7 @@ def run_screener_for_sector(sector, force_update=False):
     
     if sector.lower() in ['chứng khoán', 'securities', 'dịch vụ tài chính']:
         import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future_to_ticker = {executor.submit(calculate_engine_securities, t): t for t in top_tickers}
             for future in concurrent.futures.as_completed(future_to_ticker):
                 try:
@@ -576,7 +576,7 @@ def run_screener_for_sector(sector, force_update=False):
         
     elif sector.lower() in ['ngân hàng', 'banks']:
         import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future_to_ticker = {executor.submit(calculate_engine_bank, t): t for t in top_tickers}
             for future in concurrent.futures.as_completed(future_to_ticker):
                 try:
@@ -629,7 +629,7 @@ def run_screener_for_sector(sector, force_update=False):
         return final_results
     else:
         import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future_to_ticker = {executor.submit(calculate_engine, t): t for t in top_tickers}
             for future in concurrent.futures.as_completed(future_to_ticker):
                 try:
@@ -1146,7 +1146,7 @@ def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
                 
     reports = {}
     import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future_to_ticker = {executor.submit(get_stock_report, t, tax_rate_fallback): t for t in tickers}
         for future in concurrent.futures.as_completed(future_to_ticker):
             t = future_to_ticker[future]
