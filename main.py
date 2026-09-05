@@ -12,8 +12,7 @@ if api_key:
     try:
         setup_api_key(api_key)
     except Exception as e:
-        safe_err = str(e).encode('ascii', 'ignore').decode('ascii')
-        print(f"Loi khi setup API Key: {safe_err}")
+        print(f"Loi khi setup API Key: {e}")
 
 app = FastAPI(title="Exceptional Trader API")
 

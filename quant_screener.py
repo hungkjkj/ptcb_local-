@@ -262,14 +262,14 @@ def calculate_engine_securities(ticker):
         for y_col in years_cols[:5]:
             val = get_row_value(df_ratio, ["ROEA", "ROE", "lợi nhuận trên vốn chủ sở hữu"], y_col)
             if val != 0:
-                if abs(val) > 1 and abs(val) < 100: val = val / 100
+                if val: val = val / 100
                 avg_roe_5y += val
                 valid_roe_count += 1
         avg_roe_5y = avg_roe_5y / valid_roe_count if valid_roe_count > 0 else roe_ttm
 
         roa = get_latest_q_value(df_ratio_q, ["ROA bình quân 4 quý", "roa_trailling", "ROAA", "ROA", "sinh lợi trên tổng tài sản"])
         if roa == 0: roa = get_row_value(df_ratio, ["ROAA", "ROA", "sinh lợi trên tổng tài sản"], latest_year_str)
-        if roa and abs(roa) < 100: roa = roa / 100
+        if roa: roa = roa / 100
 
         equity_ratio = (roa / roe_ttm) if roe_ttm > 0 else 0
         
@@ -328,15 +328,18 @@ def calculate_engine_bank(ticker):
             
         roa = get_latest_q_value(df_ratio_q, ["ROA bình quân 4 quý", "roa_trailling", "ROAA", "ROA", "sinh lợi trên tổng tài sản"])
         if roa == 0: roa = get_row_value(df_ratio, ["ROAA", "ROA", "sinh lợi trên tổng tài sản"], latest_year_str)
-        if roa and abs(roa) < 100: roa = roa / 100
+        if roa: roa = roa / 100
              
         roe = get_latest_q_value(df_ratio_q, ["ROE bình quân 4 quý", "roe_trailling", "ROEA", "ROE", "lợi nhuận trên vốn chủ sở hữu"])
         if roe == 0: roe = get_row_value(df_ratio, ["ROEA", "ROE", "lợi nhuận trên vốn chủ sở hữu"], latest_year_str)
-        if roe and abs(roe) > 1 and abs(roe) < 100: roe = roe / 100
+        if roe: roe = roe / 100
              
         nim = get_latest_q_value(df_ratio_q, ["NIM", "lãi thuần", "thu nhập lãi thuần"])
-        if nim == 0: nim = get_row_value(df_ratio, ["NIM", "lãi thuần", "thu nhập lãi thuần"], latest_year_str)
-        if nim and abs(nim) > 0.5 and abs(nim) < 100: nim = nim / 100
+        if nim != 0:
+            nim = nim * 4
+        else:
+            nim = get_row_value(df_ratio, ["NIM", "lãi thuần", "thu nhập lãi thuần"], latest_year_str)
+        if nim: nim = nim / 100
             
         try:
             overview_df = Company(symbol=ticker, source='VCI').overview()
@@ -413,13 +416,13 @@ def calculate_engine(ticker, tax_rate_fallback=0.2):
         cfo_quality_ttm = get_latest_q_value(df_ratio_q, ["cash_to_income_2", "Dòng tiền từ HĐKD trên Lợi nhuận thuần"]) if df_ratio_q is not None else 0
         if cfo_quality_ttm == 0:
             cfo_quality_ttm = get_row_value(df_ratio, ["cash_to_income_2", "Dòng tiền từ HĐKD trên Lợi nhuận thuần"], latest_year_str)
-        if cfo_quality_ttm and abs(cfo_quality_ttm) > 1 and abs(cfo_quality_ttm) < 1000: cfo_quality_ttm = cfo_quality_ttm / 100
+        if cfo_quality_ttm: cfo_quality_ttm = cfo_quality_ttm / 100
 
         # ED Current (Equity / Debt)
         de_current = get_latest_q_value(df_ratio_q, ["debt_to_equity", "Nợ vay trên Vốn chủ sở hữu"]) if df_ratio_q is not None else 0
         if de_current == 0:
             de_current = get_row_value(df_ratio, ["debt_to_equity", "Nợ vay trên Vốn chủ sở hữu"], latest_year_str)
-        if de_current and abs(de_current) > 1 and abs(de_current) < 1000: de_current = de_current / 100
+        if de_current: de_current = de_current / 100
         
         ed_current = (1 / de_current) if de_current > 0 else 10.0
             
@@ -752,10 +755,10 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
                 pe = get_row_value(df_ratio, ["P/E", "Chỉ số giá thị trường trên thu nhập (P/E)"], ratio_year_str)
                 ep = 1 / pe if pe and pe != 0 else 0
                 roe = get_row_value(df_ratio, ["ROE", "lợi nhuận trên vốn chủ sở hữu"], ratio_year_str)
-                if roe and abs(roe) < 100: roe = roe / 100
+                if roe: roe = roe / 100
                 
                 roa = get_row_value(df_ratio, ["ROAA", "ROA", "sinh lợi trên tổng tài sản"], ratio_year_str)
-                if roa and abs(roa) < 100: roa = roa / 100
+                if roa: roa = roa / 100
                 
                 value_ratio = (roe / pb) if pb and pb > 0 and roe else 0.0
 
@@ -783,15 +786,18 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
                 
             roa_q = get_latest_q_value(df_ratio_q, ["ROA bình quân 4 quý", "roa_trailling", "ROAA", "ROA", "sinh lợi trên tổng tài sản"])
             if roa_q == 0: roa_q = history[-1].get('roa', 0) if history else 0
-            if roa_q and abs(roa_q) < 100: roa_q = roa_q / 100
+            if roa_q: roa_q = roa_q / 100
                 
             roe_q = get_latest_q_value(df_ratio_q, ["ROE bình quân 4 quý", "roe_trailling", "ROEA", "ROE", "lợi nhuận trên vốn chủ sở hữu"])
             if roe_q == 0: roe_q = history[-1].get('roe', 0) if history else 0
-            if roe_q and abs(roe_q) > 1 and abs(roe_q) < 100: roe_q = roe_q / 100
+            if roe_q: roe_q = roe_q / 100
             
             nim_q = get_latest_q_value(df_ratio_q, ["NIM", "lãi thuần", "thu nhập lãi thuần"])
-            if nim_q == 0: nim_q = history[-1].get('nim', 0) if history else 0
-            if nim_q and abs(nim_q) > 0.5 and abs(nim_q) < 100: nim_q = nim_q / 100
+            if nim_q != 0:
+                nim_q = nim_q * 4
+                if nim_q: nim_q = nim_q / 100
+            else:
+                nim_q = history[-1].get('nim', 0) if history else 0
                 
             pb_q = get_latest_q_value(df_ratio_q, ["P/B", "giá trị sổ sách (P/B)"])
             if pb_q == 0: pb_q = history[-1].get('pb', 0) if history else 0
@@ -850,12 +856,12 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
                 ratio_year_str = f"{target_year_str}-Năm" if f"{target_year_str}-Năm" in df_ratio.columns else target_year_str
                 
                 roe = get_row_value(df_ratio, ["ROEA", "ROE", "lợi nhuận trên vốn chủ sở hữu"], ratio_year_str)
-                if roe and abs(roe) > 1 and abs(roe) < 100: roe = roe / 100
+                if roe: roe = roe / 100
                 
                 pb = get_row_value(df_ratio, ["P/B", "giá trị sổ sách (P/B)"], ratio_year_str)
                 pe = get_row_value(df_ratio, ["P/E", "thu nhập trên cổ phần (P/E)", "Chỉ số giá thị trường trên thu nhập (P/E)"], ratio_year_str)
                 roa = get_row_value(df_ratio, ["ROAA", "ROA", "sinh lợi trên tổng tài sản"], ratio_year_str)
-                if roa and abs(roa) < 100: roa = roa / 100
+                if roa: roa = roa / 100
                 
                 equity_ratio = (roa / roe) if (roe and roe > 0) else 0
                 
@@ -885,11 +891,11 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
             
             roe_ttm = get_latest_q_value(df_ratio_q, ["ROE bình quân 4 quý", "roe_trailling", "ROEA", "ROE", "lợi nhuận trên vốn chủ sở hữu"])
             if roe_ttm == 0: roe_ttm = history[-1].get('roe', 0) if history else 0
-            if roe_ttm and abs(roe_ttm) > 1 and abs(roe_ttm) < 100: roe_ttm = roe_ttm / 100
+            if roe_ttm: roe_ttm = roe_ttm / 100
             
             roa_q = get_latest_q_value(df_ratio_q, ["ROA bình quân 4 quý", "roa_trailling", "ROAA", "ROA", "sinh lợi trên tổng tài sản"])
             if roa_q == 0: roa_q = history[-1].get('roa', 0) if history else 0
-            if roa_q and abs(roa_q) < 100: roa_q = roa_q / 100
+            if roa_q: roa_q = roa_q / 100
             
             equity_ratio_q = (roa_q / roe_ttm) if (roe_ttm and roe_ttm > 0) else 0
             
@@ -1123,7 +1129,7 @@ def get_sector_medians(sector):
             
     # Nếu chưa có cache, không gọi đồng bộ để tránh sập RAM trên Render.
     # Cache sẽ được tạo ngầm thông qua background tasks hoặc cron job.
-    run_screener_for_sector(sector)
+    # run_screener_for_sector(sector)
     
     if os.path.exists(medians_cache_file):
         try:
