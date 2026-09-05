@@ -674,7 +674,7 @@ def run_screener_for_sector(sector, force_update=False):
         df['Score_ROIC_TTM'] = (df['ROIC_TTM'] / median_roic_ttm) * 100
         df['Score_Value'] = (df['Value_Ratio'] / median_value) * 100
         
-        df['Score_CFO_TTM'] = (df['CFO_Quality_TTM'] / median_cfo_ttm) * 100
+        df['Score_CFO_TTM'] = (df['CFO_Quality_TTM'].clip(upper=3.0) / median_cfo_ttm) * 100
         df.loc[df['CFO_Quality_TTM'] < 0, 'Score_CFO_TTM'] = 0
         
         df['Score_ED_Current'] = (df['ED_Current'] / median_ed_curr) * 100
@@ -1255,9 +1255,9 @@ def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
             df_rank['Score_ROIC_TTM'] = (df_rank['ROIC_TTM'] / m_roic_ttm) * 100
             df_rank['Score_Value'] = (df_rank['Value_Ratio'] / m_value) * 100
             
-            df_rank['Score_CFO'] = (df_rank['CFO_Quality'] / m_cfo) * 100
+            df_rank['Score_CFO'] = (df_rank['CFO_Quality'].clip(upper=3.0) / m_cfo) * 100
             df_rank.loc[df_rank['CFO_Quality'] < 0, 'Score_CFO'] = 0
-            df_rank['Score_CFO_TTM'] = (df_rank['CFO_Quality_TTM'] / m_cfo_ttm) * 100
+            df_rank['Score_CFO_TTM'] = (df_rank['CFO_Quality_TTM'].clip(upper=3.0) / m_cfo_ttm) * 100
             df_rank.loc[df_rank['CFO_Quality_TTM'] < 0, 'Score_CFO_TTM'] = 0
             
             df_rank['Score_DE'] = np.maximum(0, 2 - (df_rank['DE_5Y'] / m_de)) * 100
