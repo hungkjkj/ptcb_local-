@@ -10,6 +10,24 @@ import os
 os.environ["CODESPACE_NAME"] = "render_bypass" # Fix bug hosting_service của vnstock trên server Render
 from vnstock import Listing, Finance, Vnstock, Company
 
+def with_retry(func):
+    def wrapper(*args, **kwargs):
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                print(f"Lỗi truy xuất API ({e}). Đợi 10s để thử lại (Lần {attempt+1}/{max_retries})...")
+                time.sleep(10)
+        return func(*args, **kwargs)
+    return wrapper
+
+Finance.ratio = with_retry(Finance.ratio)
+Finance.balance_sheet = with_retry(Finance.balance_sheet)
+Finance.income_statement = with_retry(Finance.income_statement)
+Finance.cash_flow = with_retry(Finance.cash_flow)
+Company.overview = with_retry(Company.overview)
+
 def get_available_sectors():
     """ Trả về danh sách tất cả các ngành nghề trên thị trường. """
     try:
@@ -518,7 +536,7 @@ def run_screener_for_sector(sector, force_update=False):
     
     if sector.lower() in ['chứng khoán', 'securities', 'dịch vụ tài chính']:
         import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             future_to_ticker = {executor.submit(calculate_engine_securities, t): t for t in top_tickers}
             for future in concurrent.futures.as_completed(future_to_ticker):
                 try:
@@ -579,7 +597,7 @@ def run_screener_for_sector(sector, force_update=False):
         
     elif sector.lower() in ['ngân hàng', 'banks']:
         import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             future_to_ticker = {executor.submit(calculate_engine_bank, t): t for t in top_tickers}
             for future in concurrent.futures.as_completed(future_to_ticker):
                 try:
@@ -632,7 +650,7 @@ def run_screener_for_sector(sector, force_update=False):
         return final_results
     else:
         import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             future_to_ticker = {executor.submit(calculate_engine, t): t for t in top_tickers}
             for future in concurrent.futures.as_completed(future_to_ticker):
                 try:
@@ -1152,7 +1170,7 @@ def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
                 
     reports = {}
     import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_to_ticker = {executor.submit(get_stock_report, t, tax_rate_fallback): t for t in tickers}
         for future in concurrent.futures.as_completed(future_to_ticker):
             t = future_to_ticker[future]

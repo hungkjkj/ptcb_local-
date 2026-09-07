@@ -46,11 +46,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Fetch data sequentially to avoid API rate limits
     async function loadAllSectors() {
-        const promises = targetSectors.map(sector => {
+        for (const sector of targetSectors) {
             const safeId = 's_' + btoa(unescape(encodeURIComponent(sector))).replace(/[^a-zA-Z0-9]/g, '');
-            return fetchDataForSector(sector, safeId);
-        });
-        await Promise.all(promises);
+            await fetchDataForSector(sector, safeId);
+            // Wait 1 second between sectors to reduce rate limits
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
     }
     
     loadAllSectors();
