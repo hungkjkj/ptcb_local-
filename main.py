@@ -106,6 +106,7 @@ def sync_data():
 def get_report(ticker: str, peers: str = "", taxRate: float = 0.2):
     print(f"API CALL: /api/report?ticker={ticker}&peers={peers}&taxRate={taxRate}")
     try:
+        quant_screener.USER_PRIORITY_FLAG.set()
         if not ticker:
             return {"status": "error", "detail": "Thiếu mã cổ phiếu."}
         
@@ -127,6 +128,8 @@ def get_report(ticker: str, peers: str = "", taxRate: float = 0.2):
         return {"status": "success", "data": safe_result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        quant_screener.USER_PRIORITY_FLAG.clear()
 
 # Phục vụ index.html mặc định từ thư mục public
 @app.get("/")

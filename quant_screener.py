@@ -28,6 +28,9 @@ Finance.income_statement = with_retry(Finance.income_statement)
 Finance.cash_flow = with_retry(Finance.cash_flow)
 Company.overview = with_retry(Company.overview)
 
+import threading
+USER_PRIORITY_FLAG = threading.Event()
+
 def get_available_sectors():
     """ Trả về danh sách tất cả các ngành nghề trên thị trường. """
     try:
@@ -535,16 +538,15 @@ def run_screener_for_sector(sector, force_update=False):
     results = []
     
     if sector.lower() in ['chứng khoán', 'securities', 'dịch vụ tài chính']:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            future_to_ticker = {executor.submit(calculate_engine_securities, t): t for t in top_tickers}
-            for future in concurrent.futures.as_completed(future_to_ticker):
-                try:
-                    res = future.result()
-                    if res:
-                        results.append(res)
-                except Exception as e:
-                    print(f"Loi song song {future_to_ticker[future]}: {e}")
+        for t in top_tickers:
+            while USER_PRIORITY_FLAG.is_set():
+                time.sleep(1)
+            try:
+                res = calculate_engine_securities(t)
+                if res:
+                    results.append(res)
+            except Exception as e:
+                print(f"Loi: {e}")
         df = pd.DataFrame(results)
         if df.empty:
             return []
@@ -596,16 +598,15 @@ def run_screener_for_sector(sector, force_update=False):
         return final_results
         
     elif sector.lower() in ['ngân hàng', 'banks']:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            future_to_ticker = {executor.submit(calculate_engine_bank, t): t for t in top_tickers}
-            for future in concurrent.futures.as_completed(future_to_ticker):
-                try:
-                    res = future.result()
-                    if res:
-                        results.append(res)
-                except Exception as e:
-                    print(f"Loi song song {future_to_ticker[future]}: {e}")
+        for t in top_tickers:
+            while USER_PRIORITY_FLAG.is_set():
+                time.sleep(1)
+            try:
+                res = calculate_engine_bank(t)
+                if res:
+                    results.append(res)
+            except Exception as e:
+                print(f"Loi: {e}")
         df = pd.DataFrame(results)
         if df.empty:
             return []
@@ -649,16 +650,15 @@ def run_screener_for_sector(sector, force_update=False):
             print("CACHE ERROR:", e)
         return final_results
     else:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            future_to_ticker = {executor.submit(calculate_engine, t): t for t in top_tickers}
-            for future in concurrent.futures.as_completed(future_to_ticker):
-                try:
-                    res = future.result()
-                    if res:
-                        results.append(res)
-                except Exception as e:
-                    print(f"Loi song song {future_to_ticker[future]}: {e}")
+        for t in top_tickers:
+            while USER_PRIORITY_FLAG.is_set():
+                time.sleep(1)
+            try:
+                res = calculate_engine(t)
+                if res:
+                    results.append(res)
+            except Exception as e:
+                print(f"Loi: {e}")
         df = pd.DataFrame(results)
         if df.empty:
             return []
@@ -1169,17 +1169,13 @@ def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
                 tickers.append(p)
                 
     reports = {}
-    import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        future_to_ticker = {executor.submit(get_stock_report, t, tax_rate_fallback): t for t in tickers}
-        for future in concurrent.futures.as_completed(future_to_ticker):
-            t = future_to_ticker[future]
-            try:
-                rep = future.result()
-                if rep:
-                    reports[t] = rep
-            except Exception as exc:
-                print(f"Loi khi lấy {t} song song: {exc}")
+    for t in tickers:
+        try:
+            rep = get_stock_report(t, tax_rate_fallback)
+            if rep:
+                reports[t] = rep
+        except Exception as exc:
+            print(f"Loi khi lấy {t}: {exc}")
             
     if main_ticker not in reports:
         return {'status': 'error', 'detail': f'Không tìm thấy dữ liệu cho mã chính {main_ticker}'}
