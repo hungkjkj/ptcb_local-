@@ -1171,13 +1171,17 @@ def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
                 tickers.append(p)
                 
     reports = {}
-    for t in tickers:
-        try:
-            rep = get_stock_report(t, tax_rate_fallback)
-            if rep:
-                reports[t] = rep
-        except Exception as exc:
-            print(f"Loi khi lấy {t}: {exc}")
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_ticker = {executor.submit(get_stock_report, t, tax_rate_fallback): t for t in tickers}
+        for future in concurrent.futures.as_completed(future_to_ticker):
+            t = future_to_ticker[future]
+            try:
+                rep = future.result()
+                if rep:
+                    reports[t] = rep
+            except Exception as exc:
+                print(f"Loi khi lấy {t}: {exc}")
             
     if main_ticker not in reports:
         return {'status': 'error', 'detail': f'Không tìm thấy dữ liệu cho mã chính {main_ticker}'}
