@@ -44,7 +44,8 @@ def run_screener(sector: str, background_tasks: BackgroundTasks):
     try:
         import os, json
         from datetime import datetime
-        safe_sector = "".join([c if c.isalnum() else "_" for c in sector])
+        import urllib.parse
+        safe_sector = urllib.parse.quote(sector).replace('%', '_')
         today = datetime.now().strftime("%Y-%m-%d")
         screener_cache_file = os.path.join("cache", f"screener_{safe_sector}_{today}.json")
         

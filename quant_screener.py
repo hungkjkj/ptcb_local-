@@ -509,7 +509,8 @@ def run_screener_for_sector(sector, force_update=False):
         except:
             pass
             
-    safe_sector = "".join([c if c.isalnum() else "_" for c in sector])
+    import urllib.parse
+    safe_sector = urllib.parse.quote(sector).replace('%', '_')
     today = datetime.now().strftime("%Y-%m-%d")
     screener_cache_file = os.path.join(CACHE_DIR, f"screener_{safe_sector}_{today}.json")
     medians_cache_file = os.path.join(CACHE_DIR, f"medians_{safe_sector}_{today}.json")
@@ -1134,7 +1135,8 @@ def get_sector_medians(sector):
     from datetime import datetime
     
     CACHE_DIR = "cache"
-    safe_sector = "".join([c if c.isalnum() else "_" for c in sector])
+    import urllib.parse
+    safe_sector = urllib.parse.quote(sector).replace('%', '_')
     today = datetime.now().strftime("%Y-%m-%d")
     medians_cache_file = os.path.join(CACHE_DIR, f"medians_{safe_sector}_{today}.json")
     
