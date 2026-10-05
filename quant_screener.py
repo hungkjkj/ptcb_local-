@@ -535,10 +535,15 @@ def run_screener_for_sector(sector, force_update=False):
         if df_temp.empty: return
         if sector_type == 'sec':
             median_pb = df_temp['PB'].median()
+            if median_pb is None or pd.isna(median_pb) or median_pb < 0.01: median_pb = 0.01
             median_pe = df_temp['PE'].median()
+            if median_pe is None or pd.isna(median_pe) or median_pe < 0.01: median_pe = 0.01
             median_roe_ttm = df_temp['ROE_TTM'].median()
+            if median_roe_ttm is None or pd.isna(median_roe_ttm) or median_roe_ttm < 0.01: median_roe_ttm = 0.01
             median_roe_5y = df_temp['ROE_5Y'].median()
+            if median_roe_5y is None or pd.isna(median_roe_5y) or median_roe_5y < 0.01: median_roe_5y = 0.01
             median_eq = df_temp['Equity_Ratio'].median()
+            if median_eq is None or pd.isna(median_eq) or median_eq < 0.01: median_eq = 0.01
             
             if pd.isna(median_pb) or median_pb == 0: median_pb = 1.5
             if pd.isna(median_pe) or median_pe == 0: median_pe = 15.0
@@ -552,12 +557,20 @@ def run_screener_for_sector(sector, force_update=False):
             df_temp['Score_ROE_5Y'] = (df_temp['ROE_5Y'] / median_roe_5y) * 100
             df_temp['Score_EQ'] = (df_temp['Equity_Ratio'] / median_eq) * 100
             
+            for col in df_temp.columns:
+                if col.startswith('Score_'):
+                    df_temp[col] = df_temp[col].clip(upper=300)
+
             df_temp['Total Score'] = (df_temp['Score_PB'] * 0.30) + (df_temp['Score_ROE_TTM'] * 0.20) + (df_temp['Score_ROE_5Y'] * 0.15) + (df_temp['Score_PE'] * 0.20) + (df_temp['Score_EQ'] * 0.15)
         elif sector_type == 'bank':
             median_roa = df_temp['ROA'].median()
+            if median_roa is None or pd.isna(median_roa) or median_roa < 0.01: median_roa = 0.01
             median_nim = df_temp['NIM'].median()
+            if median_nim is None or pd.isna(median_nim) or median_nim < 0.01: median_nim = 0.01
             median_value = df_temp['Value_Ratio'].median()
+            if median_value is None or pd.isna(median_value) or median_value < 0.01: median_value = 0.01
             median_eq = df_temp['Equity_Ratio'].median()
+            if median_eq is None or pd.isna(median_eq) or median_eq < 0.01: median_eq = 0.01
             
             if pd.isna(median_roa) or median_roa == 0: median_roa = 0.02
             if pd.isna(median_nim) or median_nim == 0: median_nim = 0.035
@@ -569,13 +582,22 @@ def run_screener_for_sector(sector, force_update=False):
             df_temp['Score_Value'] = (df_temp['Value_Ratio'] / median_value) * 100
             df_temp['Score_EQ'] = (df_temp['Equity_Ratio'] / median_eq) * 100
             
+            for col in df_temp.columns:
+                if col.startswith('Score_'):
+                    df_temp[col] = df_temp[col].clip(upper=300)
+
             df_temp['Total Score'] = (df_temp['Score_Value'] * 0.30) + (df_temp['Score_EQ'] * 0.25) + (df_temp['Score_ROA'] * 0.25) + (df_temp['Score_NIM'] * 0.20)
         else:
             median_roic = df_temp['ROIC_5Y'].median()
+            if median_roic is None or pd.isna(median_roic) or median_roic < 0.01: median_roic = 0.01
             median_roic_ttm = df_temp['ROIC_TTM'].median()
+            if median_roic_ttm is None or pd.isna(median_roic_ttm) or median_roic_ttm < 0.01: median_roic_ttm = 0.01
             median_value = df_temp['Value_Ratio'].median()
+            if median_value is None or pd.isna(median_value) or median_value < 0.01: median_value = 0.01
             median_cfo_ttm = df_temp['CFO_Quality_TTM'].median()
+            if median_cfo_ttm is None or pd.isna(median_cfo_ttm) or median_cfo_ttm < 0.01: median_cfo_ttm = 0.01
             median_ed_curr = df_temp['ED_Current'].median()
+            if median_ed_curr is None or pd.isna(median_ed_curr) or median_ed_curr < 0.01: median_ed_curr = 0.01
             
             if pd.isna(median_roic) or median_roic == 0: median_roic = 0.10
             if pd.isna(median_roic_ttm) or median_roic_ttm == 0: median_roic_ttm = 0.10
@@ -592,6 +614,10 @@ def run_screener_for_sector(sector, force_update=False):
             
             df_temp['Score_ED_Current'] = (df_temp['ED_Current'] / median_ed_curr) * 100
             
+            for col in df_temp.columns:
+                if col.startswith('Score_'):
+                    df_temp[col] = df_temp[col].clip(upper=300)
+
             df_temp['Total Score'] = (df_temp['Score_ROIC'] * 0.15) + (df_temp['Score_ROIC_TTM'] * 0.25) + (df_temp['Score_Value'] * 0.20) + (df_temp['Score_CFO_TTM'] * 0.20) + (df_temp['Score_ED_Current'] * 0.20)
 
         df_temp = df_temp.sort_values(by='Total Score', ascending=False).reset_index(drop=True).fillna(0)
@@ -633,10 +659,15 @@ def run_screener_for_sector(sector, force_update=False):
         
     if s_type == 'sec':
         median_pb = df['PB'].median()
+        if median_pb is None or pd.isna(median_pb) or median_pb < 0.01: median_pb = 0.01
         median_pe = df['PE'].median()
+        if median_pe is None or pd.isna(median_pe) or median_pe < 0.01: median_pe = 0.01
         median_roe_ttm = df['ROE_TTM'].median()
+        if median_roe_ttm is None or pd.isna(median_roe_ttm) or median_roe_ttm < 0.01: median_roe_ttm = 0.01
         median_roe_5y = df['ROE_5Y'].median()
+        if median_roe_5y is None or pd.isna(median_roe_5y) or median_roe_5y < 0.01: median_roe_5y = 0.01
         median_eq = df['Equity_Ratio'].median()
+        if median_eq is None or pd.isna(median_eq) or median_eq < 0.01: median_eq = 0.01
         if pd.isna(median_pb) or median_pb == 0: median_pb = 1.5
         if pd.isna(median_pe) or median_pe == 0: median_pe = 15.0
         if pd.isna(median_roe_ttm) or median_roe_ttm == 0: median_roe_ttm = 0.10
@@ -651,13 +682,21 @@ def run_screener_for_sector(sector, force_update=False):
         df['Score_ROE_TTM'] = (df['ROE_TTM'] / median_roe_ttm) * 100
         df['Score_ROE_5Y'] = (df['ROE_5Y'] / median_roe_5y) * 100
         df['Score_EQ'] = (df['Equity_Ratio'] / median_eq) * 100
+        for col in df.columns:
+            if col.startswith('Score_'):
+                df[col] = df[col].clip(upper=300)
+
         df['Total Score'] = (df['Score_PB'] * 0.30) + (df['Score_ROE_TTM'] * 0.20) + (df['Score_ROE_5Y'] * 0.15) + (df['Score_PE'] * 0.20) + (df['Score_EQ'] * 0.15)
         
     elif s_type == 'bank':
         median_roa = df['ROA'].median()
+        if median_roa is None or pd.isna(median_roa) or median_roa < 0.01: median_roa = 0.01
         median_nim = df['NIM'].median()
+        if median_nim is None or pd.isna(median_nim) or median_nim < 0.01: median_nim = 0.01
         median_value = df['Value_Ratio'].median()
+        if median_value is None or pd.isna(median_value) or median_value < 0.01: median_value = 0.01
         median_eq = df['Equity_Ratio'].median()
+        if median_eq is None or pd.isna(median_eq) or median_eq < 0.01: median_eq = 0.01
         if pd.isna(median_roa) or median_roa == 0: median_roa = 0.02
         if pd.isna(median_nim) or median_nim == 0: median_nim = 0.035
         if pd.isna(median_value) or median_value == 0: median_value = 10.0
@@ -670,14 +709,23 @@ def run_screener_for_sector(sector, force_update=False):
         df['Score_NIM'] = (df['NIM'].clip(upper=0.045) / median_nim) * 100
         df['Score_Value'] = (df['Value_Ratio'] / median_value) * 100
         df['Score_EQ'] = (df['Equity_Ratio'] / median_eq) * 100
+        for col in df.columns:
+            if col.startswith('Score_'):
+                df[col] = df[col].clip(upper=300)
+
         df['Total Score'] = (df['Score_Value'] * 0.30) + (df['Score_EQ'] * 0.25) + (df['Score_ROA'] * 0.25) + (df['Score_NIM'] * 0.20)
         
     else:
         median_roic = df['ROIC_5Y'].median()
+        if median_roic is None or pd.isna(median_roic) or median_roic < 0.01: median_roic = 0.01
         median_roic_ttm = df['ROIC_TTM'].median()
+        if median_roic_ttm is None or pd.isna(median_roic_ttm) or median_roic_ttm < 0.01: median_roic_ttm = 0.01
         median_value = df['Value_Ratio'].median()
+        if median_value is None or pd.isna(median_value) or median_value < 0.01: median_value = 0.01
         median_cfo_ttm = df['CFO_Quality_TTM'].median()
+        if median_cfo_ttm is None or pd.isna(median_cfo_ttm) or median_cfo_ttm < 0.01: median_cfo_ttm = 0.01
         median_ed_curr = df['ED_Current'].median()
+        if median_ed_curr is None or pd.isna(median_ed_curr) or median_ed_curr < 0.01: median_ed_curr = 0.01
         if pd.isna(median_roic) or median_roic == 0: median_roic = 0.10
         if pd.isna(median_roic_ttm) or median_roic_ttm == 0: median_roic_ttm = 0.10
         if pd.isna(median_value) or median_value == 0: median_value = 10.0
@@ -693,6 +741,10 @@ def run_screener_for_sector(sector, force_update=False):
         df['Score_CFO_TTM'] = (df['CFO_Quality_TTM'].clip(upper=3.0) / median_cfo_ttm) * 100
         df.loc[df['CFO_Quality_TTM'] < 0, 'Score_CFO_TTM'] = 0
         df['Score_ED_Current'] = (df['ED_Current'] / median_ed_curr) * 100
+        for col in df.columns:
+            if col.startswith('Score_'):
+                df[col] = df[col].clip(upper=300)
+
         df['Total Score'] = (df['Score_ROIC'] * 0.15) + (df['Score_ROIC_TTM'] * 0.25) + (df['Score_Value'] * 0.20) + (df['Score_CFO_TTM'] * 0.20) + (df['Score_ED_Current'] * 0.20)
 
     df = df.sort_values(by='Total Score', ascending=False).reset_index(drop=True).fillna(0)
@@ -1234,21 +1286,34 @@ def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
         
         if is_bank:
             m_roa = medians.get('median_roa', 0.02)
+            if m_roa is None or m_roa < 0.01: m_roa = 0.01
             m_nim = medians.get('median_nim', 0.035)
+            if m_nim is None or m_nim < 0.01: m_nim = 0.01
             m_value = medians.get('median_value', 10.0)
+            if m_value is None or m_value < 0.01: m_value = 0.01
             m_eq = medians.get('median_eq', 0.1)
+            if m_eq is None or m_eq < 0.01: m_eq = 0.01
             
             df_rank['Score_ROA'] = (df_rank['ROA_Current'] / m_roa) * 100
             df_rank['Score_NIM'] = (df_rank['NIM_Current'].clip(upper=0.045) / m_nim) * 100
             df_rank['Score_Value'] = (df_rank['Value_Ratio_Current'] / m_value) * 100
             df_rank['Score_EQ'] = (df_rank['Equity_Ratio_Current'] / m_eq) * 100
+            for col in df_rank.columns:
+                if col.startswith('Score_'):
+                    df_rank[col] = df_rank[col].clip(upper=300)
+
             df_rank['Total_Score'] = (df_rank['Score_Value'] * 0.30) + (df_rank['Score_EQ'] * 0.25) + (df_rank['Score_ROA'] * 0.25) + (df_rank['Score_NIM'] * 0.20)
         elif is_securities:
             m_pb = medians.get('median_pb', 1.5)
+            if m_pb is None or m_pb < 0.01: m_pb = 0.01
             m_pe = medians.get('median_pe', 15.0)
+            if m_pe is None or m_pe < 0.01: m_pe = 0.01
             m_roe = medians.get('median_roe_ttm', 0.1)
+            if m_roe is None or m_roe < 0.01: m_roe = 0.01
             m_roe5 = medians.get('median_roe_5y', 0.1)
+            if m_roe5 is None or m_roe5 < 0.01: m_roe5 = 0.01
             m_eq = medians.get('median_eq', 0.3)
+            if m_eq is None or m_eq < 0.01: m_eq = 0.01
             
             df_rank['Score_PB'] = np.where(df_rank['PB_Current'] > 0, (m_pb / df_rank['PB_Current']) * 100, 0)
             df_rank['Score_PE'] = np.where(df_rank['PE_Current'] > 0, (m_pe / df_rank['PE_Current']) * 100, 0)
@@ -1256,17 +1321,28 @@ def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
             df_rank['Score_ROE_5Y'] = (df_rank['ROE_5Y'] / m_roe5) * 100
             df_rank['Score_EQ'] = (df_rank['Equity_Ratio_Current'] / m_eq) * 100
             
+            for col in df_rank.columns:
+                if col.startswith('Score_'):
+                    df_rank[col] = df_rank[col].clip(upper=300)
+
             df_rank['Total_Score'] = (df_rank['Score_PB'] * 0.30) + (df_rank['Score_PE'] * 0.20) + \
                                      (df_rank['Score_ROE_TTM'] * 0.20) + (df_rank['Score_ROE_5Y'] * 0.15) + \
                                      (df_rank['Score_EQ'] * 0.15)
         else:
             m_roic = medians.get('median_roic', 0.10)
+            if m_roic is None or m_roic < 0.01: m_roic = 0.01
             m_roic_ttm = medians.get('median_roic_ttm', 0.10)
+            if m_roic_ttm is None or m_roic_ttm < 0.01: m_roic_ttm = 0.01
             m_value = medians.get('median_value', 10.0)
+            if m_value is None or m_value < 0.01: m_value = 0.01
             m_cfo = medians.get('median_cfo', 1.0)
+            if m_cfo is None or m_cfo < 0.01: m_cfo = 0.01
             m_cfo_ttm = medians.get('median_cfo_ttm', 1.0)
+            if m_cfo_ttm is None or m_cfo_ttm < 0.01: m_cfo_ttm = 0.01
             m_de = medians.get('median_de', 1.0)
+            if m_de is None or m_de < 0.01: m_de = 0.01
             m_de_curr = medians.get('median_de_curr', 1.0)
+            if m_de_curr is None or m_de_curr < 0.01: m_de_curr = 0.01
 
             df_rank['Score_ROIC'] = (df_rank['ROIC_5Y'] / m_roic) * 100
             df_rank['Score_ROIC_TTM'] = (df_rank['ROIC_TTM'] / m_roic_ttm) * 100
@@ -1280,6 +1356,10 @@ def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
             df_rank['Score_DE'] = np.maximum(0, 2 - (df_rank['DE_5Y'] / m_de)) * 100
             df_rank['Score_DE_Current'] = np.maximum(0, 2 - (df_rank['DE_Current'] / m_de_curr)) * 100
             
+            for col in df_rank.columns:
+                if col.startswith('Score_'):
+                    df_rank[col] = df_rank[col].clip(upper=300)
+
             df_rank['Total_Score'] = (df_rank['Score_ROIC'] * 0.15) + (df_rank['Score_ROIC_TTM'] * 0.25) + \
                                      (df_rank['Score_Value'] * 0.20) + \
                                      (df_rank['Score_CFO'] * 0.10) + (df_rank['Score_CFO_TTM'] * 0.15) + \
