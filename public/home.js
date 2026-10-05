@@ -65,7 +65,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const tbody = document.getElementById(`tbody-${elementId}`);
             tbody.innerHTML = '';
-            if (data.status === 'success' && data.data && data.data.length > 0) {
+            
+            if (data.data && data.data.length > 0) {
                 const isBank = sector.toLowerCase().includes('ngân hàng') || sector.toLowerCase().includes('bank');
                 const isSecurities = sector.toLowerCase().includes('chứng khoán') || sector.toLowerCase().includes('securities') || sector.toLowerCase().includes('dịch vụ tài chính');
                 
@@ -165,10 +166,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                         `;
                     }
                 });
-            } else if (data.status === 'syncing') {
-                tbody.innerHTML = `<tr><td colspan="7" style="padding: 20px; text-align: center; color: #f59e0b;"><i class="fas fa-spinner fa-spin"></i> Đang tự động cào dữ liệu từ Vnstock... Vui lòng F5 sau ít phút.</td></tr>`;
-            } else {
+            } else if (data.status === 'syncing' && (!data.data || data.data.length === 0)) {
+                tbody.innerHTML = `<tr><td colspan="7" style="padding: 20px; text-align: center; color: #f59e0b;"><i class="fas fa-spinner fa-spin"></i> Đang tải dữ liệu...</td></tr>`;
+            } else if (data.status !== 'syncing' && (!data.data || data.data.length === 0)) {
                 tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #94a3b8;">Không có dữ liệu hoặc lỗi.</td></tr>`;
+            }
+
+            if (data.status === 'syncing') {
+                setTimeout(() => {
+                    fetchDataForSector(sector, elementId);
+                }, 3000);
             }
         } catch (error) {
             console.error(error);

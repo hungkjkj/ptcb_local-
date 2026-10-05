@@ -498,37 +498,29 @@ def with_lock(lock):
 
 @with_lock(_scrape_lock)
 def run_screener_for_sector(sector, force_update=False):
-    import json
     import os
+    import json
     from datetime import datetime
+    import concurrent.futures
+    import threading
     
     CACHE_DIR = "cache"
-    if not os.path.exists(CACHE_DIR):
-        try:
-            os.makedirs(CACHE_DIR)
-        except:
-            pass
-            
     import urllib.parse
     safe_sector = urllib.parse.quote(sector).replace('%', '_')
     today = datetime.now().strftime("%Y-%m-%d")
     screener_cache_file = os.path.join(CACHE_DIR, f"screener_{safe_sector}_{today}.json")
+    partial_cache_file = os.path.join(CACHE_DIR, f"partial_{safe_sector}_{today}.json")
     medians_cache_file = os.path.join(CACHE_DIR, f"medians_{safe_sector}_{today}.json")
     
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+        
     if not force_update and os.path.exists(screener_cache_file):
         try:
             with open(screener_cache_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except:
             pass
-            
-    # Clean old caches occasionally
-    try:
-        for filename in os.listdir(CACHE_DIR):
-            if filename.endswith(".json") and today not in filename:
-                os.remove(os.path.join(CACHE_DIR, filename))
-    except:
-        pass
 
     tickers = get_tickers_by_sector(sector)
     if not tickers:
@@ -537,182 +529,187 @@ def run_screener_for_sector(sector, force_update=False):
     top_tickers = get_top_market_cap(tickers, limit=20)
     
     results = []
+    write_lock = threading.Lock()
     
-    if sector.lower() in ['chứng khoán', 'securities', 'dịch vụ tài chính']:
-        for t in top_tickers:
-            while USER_PRIORITY_FLAG.is_set():
-                time.sleep(1)
-            try:
-                res = calculate_engine_securities(t)
-                if res:
-                    results.append(res)
-            except Exception as e:
-                print(f"Loi: {e}")
-        df = pd.DataFrame(results)
-        if df.empty:
-            return []
+    def update_partial(df_temp, sector_type):
+        if df_temp.empty: return
+        if sector_type == 'sec':
+            median_pb = df_temp['PB'].median()
+            median_pe = df_temp['PE'].median()
+            median_roe_ttm = df_temp['ROE_TTM'].median()
+            median_roe_5y = df_temp['ROE_5Y'].median()
+            median_eq = df_temp['Equity_Ratio'].median()
             
+            if pd.isna(median_pb) or median_pb == 0: median_pb = 1.5
+            if pd.isna(median_pe) or median_pe == 0: median_pe = 15.0
+            if pd.isna(median_roe_ttm) or median_roe_ttm == 0: median_roe_ttm = 0.10
+            if pd.isna(median_roe_5y) or median_roe_5y == 0: median_roe_5y = 0.10
+            if pd.isna(median_eq) or median_eq == 0: median_eq = 0.10
+                
+            df_temp['Score_PB'] = (median_pb / df_temp['PB'].replace(0, np.nan)) * 100
+            df_temp['Score_PE'] = (median_pe / df_temp['PE'].replace(0, np.nan)) * 100
+            df_temp['Score_ROE_TTM'] = (df_temp['ROE_TTM'] / median_roe_ttm) * 100
+            df_temp['Score_ROE_5Y'] = (df_temp['ROE_5Y'] / median_roe_5y) * 100
+            df_temp['Score_EQ'] = (df_temp['Equity_Ratio'] / median_eq) * 100
+            
+            df_temp['Total Score'] = (df_temp['Score_PB'] * 0.30) + (df_temp['Score_ROE_TTM'] * 0.20) + (df_temp['Score_ROE_5Y'] * 0.15) + (df_temp['Score_PE'] * 0.20) + (df_temp['Score_EQ'] * 0.15)
+        elif sector_type == 'bank':
+            median_roa = df_temp['ROA'].median()
+            median_nim = df_temp['NIM'].median()
+            median_value = df_temp['Value_Ratio'].median()
+            median_eq = df_temp['Equity_Ratio'].median()
+            
+            if pd.isna(median_roa) or median_roa == 0: median_roa = 0.02
+            if pd.isna(median_nim) or median_nim == 0: median_nim = 0.035
+            if pd.isna(median_value) or median_value == 0: median_value = 10.0
+            if pd.isna(median_eq) or median_eq == 0: median_eq = 0.10
+                
+            df_temp['Score_ROA'] = (df_temp['ROA'] / median_roa) * 100
+            df_temp['Score_NIM'] = (df_temp['NIM'].clip(upper=0.045) / median_nim) * 100
+            df_temp['Score_Value'] = (df_temp['Value_Ratio'] / median_value) * 100
+            df_temp['Score_EQ'] = (df_temp['Equity_Ratio'] / median_eq) * 100
+            
+            df_temp['Total Score'] = (df_temp['Score_Value'] * 0.30) + (df_temp['Score_EQ'] * 0.25) + (df_temp['Score_ROA'] * 0.25) + (df_temp['Score_NIM'] * 0.20)
+        else:
+            median_roic = df_temp['ROIC_5Y'].median()
+            median_roic_ttm = df_temp['ROIC_TTM'].median()
+            median_value = df_temp['Value_Ratio'].median()
+            median_cfo_ttm = df_temp['CFO_Quality_TTM'].median()
+            median_ed_curr = df_temp['ED_Current'].median()
+            
+            if pd.isna(median_roic) or median_roic == 0: median_roic = 0.10
+            if pd.isna(median_roic_ttm) or median_roic_ttm == 0: median_roic_ttm = 0.10
+            if pd.isna(median_value) or median_value == 0: median_value = 10.0
+            if pd.isna(median_cfo_ttm) or median_cfo_ttm == 0: median_cfo_ttm = 1.0
+            if pd.isna(median_ed_curr) or median_ed_curr == 0: median_ed_curr = 1.0
+            
+            df_temp['Score_ROIC'] = (df_temp['ROIC_5Y'] / median_roic) * 100
+            df_temp['Score_ROIC_TTM'] = (df_temp['ROIC_TTM'] / median_roic_ttm) * 100
+            df_temp['Score_Value'] = (df_temp['Value_Ratio'] / median_value) * 100
+            
+            df_temp['Score_CFO_TTM'] = (df_temp['CFO_Quality_TTM'].clip(upper=3.0) / median_cfo_ttm) * 100
+            df_temp.loc[df_temp['CFO_Quality_TTM'] < 0, 'Score_CFO_TTM'] = 0
+            
+            df_temp['Score_ED_Current'] = (df_temp['ED_Current'] / median_ed_curr) * 100
+            
+            df_temp['Total Score'] = (df_temp['Score_ROIC'] * 0.15) + (df_temp['Score_ROIC_TTM'] * 0.25) + (df_temp['Score_Value'] * 0.20) + (df_temp['Score_CFO_TTM'] * 0.20) + (df_temp['Score_ED_Current'] * 0.20)
+
+        df_temp = df_temp.sort_values(by='Total Score', ascending=False).reset_index(drop=True).fillna(0)
+        try:
+            with open(partial_cache_file, 'w', encoding='utf-8') as f:
+                json.dump(df_temp.to_dict('records'), f, ensure_ascii=False)
+        except:
+            pass
+
+    def process_ticker(t, s_type, compute_func):
+        while USER_PRIORITY_FLAG.is_set():
+            time.sleep(1)
+        try:
+            res = compute_func(t)
+            if res:
+                with write_lock:
+                    results.append(res)
+                    update_partial(pd.DataFrame(results), s_type)
+        except Exception as e:
+            print(f"Loi: {e}")
+
+    if sector.lower() in ['chứng khoán', 'securities', 'dịch vụ tài chính']:
+        s_type = 'sec'
+        c_func = calculate_engine_securities
+    elif sector.lower() in ['ngân hàng', 'banks']:
+        s_type = 'bank'
+        c_func = calculate_engine_bank
+    else:
+        s_type = 'other'
+        c_func = calculate_engine
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        future_to_ticker = {executor.submit(process_ticker, t, s_type, c_func): t for t in top_tickers}
+        concurrent.futures.wait(future_to_ticker)
+
+    df = pd.DataFrame(results)
+    if df.empty:
+        return []
+        
+    if s_type == 'sec':
         median_pb = df['PB'].median()
         median_pe = df['PE'].median()
         median_roe_ttm = df['ROE_TTM'].median()
         median_roe_5y = df['ROE_5Y'].median()
         median_eq = df['Equity_Ratio'].median()
-        
         if pd.isna(median_pb) or median_pb == 0: median_pb = 1.5
         if pd.isna(median_pe) or median_pe == 0: median_pe = 15.0
         if pd.isna(median_roe_ttm) or median_roe_ttm == 0: median_roe_ttm = 0.10
         if pd.isna(median_roe_5y) or median_roe_5y == 0: median_roe_5y = 0.10
         if pd.isna(median_eq) or median_eq == 0: median_eq = 0.10
-            
         try:
             with open(medians_cache_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'median_pb': float(median_pb),
-                    'median_pe': float(median_pe),
-                    'median_roe_ttm': float(median_roe_ttm),
-                    'median_roe_5y': float(median_roe_5y),
-                    'median_eq': float(median_eq)
-                }, f)
-        except:
-            pass
-
+                json.dump({'median_pb': float(median_pb), 'median_pe': float(median_pe), 'median_roe_ttm': float(median_roe_ttm), 'median_roe_5y': float(median_roe_5y), 'median_eq': float(median_eq)}, f)
+        except: pass
         df['Score_PB'] = (median_pb / df['PB'].replace(0, np.nan)) * 100
         df['Score_PE'] = (median_pe / df['PE'].replace(0, np.nan)) * 100
         df['Score_ROE_TTM'] = (df['ROE_TTM'] / median_roe_ttm) * 100
         df['Score_ROE_5Y'] = (df['ROE_5Y'] / median_roe_5y) * 100
         df['Score_EQ'] = (df['Equity_Ratio'] / median_eq) * 100
+        df['Total Score'] = (df['Score_PB'] * 0.30) + (df['Score_ROE_TTM'] * 0.20) + (df['Score_ROE_5Y'] * 0.15) + (df['Score_PE'] * 0.20) + (df['Score_EQ'] * 0.15)
         
-        df['Total Score'] = (df['Score_PB'] * 0.30) + \
-                            (df['Score_ROE_TTM'] * 0.20) + \
-                            (df['Score_ROE_5Y'] * 0.15) + \
-                            (df['Score_PE'] * 0.20) + \
-                            (df['Score_EQ'] * 0.15)
-                            
-        df = df.sort_values(by='Total Score', ascending=False).reset_index(drop=True)
-        df = df.fillna(0)
-        
-        final_results = df.to_dict('records')
-        try:
-            df.to_json(screener_cache_file, orient='records', force_ascii=False)
-        except Exception as e:
-            print("CACHE ERROR:", e)
-        return final_results
-        
-    elif sector.lower() in ['ngân hàng', 'banks']:
-        for t in top_tickers:
-            while USER_PRIORITY_FLAG.is_set():
-                time.sleep(1)
-            try:
-                res = calculate_engine_bank(t)
-                if res:
-                    results.append(res)
-            except Exception as e:
-                print(f"Loi: {e}")
-        df = pd.DataFrame(results)
-        if df.empty:
-            return []
-            
-        # Tính trung vị (Median) của Top 10 Ngân hàng lớn nhất để làm quy chuẩn chung
+    elif s_type == 'bank':
         median_roa = df['ROA'].median()
         median_nim = df['NIM'].median()
         median_value = df['Value_Ratio'].median()
         median_eq = df['Equity_Ratio'].median()
-        
-        # Fallback nếu trung vị lỗi hoặc bằng 0
         if pd.isna(median_roa) or median_roa == 0: median_roa = 0.02
         if pd.isna(median_nim) or median_nim == 0: median_nim = 0.035
         if pd.isna(median_value) or median_value == 0: median_value = 10.0
         if pd.isna(median_eq) or median_eq == 0: median_eq = 0.10
-            
         try:
             with open(medians_cache_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'median_roa': float(median_roa),
-                    'median_nim': float(median_nim),
-                    'median_value': float(median_value),
-                    'median_eq': float(median_eq)
-                }, f)
-        except:
-            pass
-
+                json.dump({'median_roa': float(median_roa), 'median_nim': float(median_nim), 'median_value': float(median_value), 'median_eq': float(median_eq)}, f)
+        except: pass
         df['Score_ROA'] = (df['ROA'] / median_roa) * 100
         df['Score_NIM'] = (df['NIM'].clip(upper=0.045) / median_nim) * 100
         df['Score_Value'] = (df['Value_Ratio'] / median_value) * 100
         df['Score_EQ'] = (df['Equity_Ratio'] / median_eq) * 100
-        
         df['Total Score'] = (df['Score_Value'] * 0.30) + (df['Score_EQ'] * 0.25) + (df['Score_ROA'] * 0.25) + (df['Score_NIM'] * 0.20)
-        df = df.sort_values(by='Total Score', ascending=False).reset_index(drop=True)
-        df = df.fillna(0)
         
-        final_results = df.to_dict('records')
-        try:
-            df.to_json(screener_cache_file, orient='records', force_ascii=False)
-        except Exception as e:
-            print("CACHE ERROR:", e)
-        return final_results
     else:
-        for t in top_tickers:
-            while USER_PRIORITY_FLAG.is_set():
-                time.sleep(1)
-            try:
-                res = calculate_engine(t)
-                if res:
-                    results.append(res)
-            except Exception as e:
-                print(f"Loi: {e}")
-        df = pd.DataFrame(results)
-        if df.empty:
-            return []
-            
-        # SCORING - Absolute Median Normalization
         median_roic = df['ROIC_5Y'].median()
         median_roic_ttm = df['ROIC_TTM'].median()
         median_value = df['Value_Ratio'].median()
         median_cfo_ttm = df['CFO_Quality_TTM'].median()
         median_ed_curr = df['ED_Current'].median()
-        
         if pd.isna(median_roic) or median_roic == 0: median_roic = 0.10
         if pd.isna(median_roic_ttm) or median_roic_ttm == 0: median_roic_ttm = 0.10
         if pd.isna(median_value) or median_value == 0: median_value = 10.0
         if pd.isna(median_cfo_ttm) or median_cfo_ttm == 0: median_cfo_ttm = 1.0
         if pd.isna(median_ed_curr) or median_ed_curr == 0: median_ed_curr = 1.0
-        
         try:
             with open(medians_cache_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'median_roic': float(median_roic),
-                    'median_roic_ttm': float(median_roic_ttm),
-                    'median_value': float(median_value),
-                    'median_cfo_ttm': float(median_cfo_ttm),
-                    'median_ed_curr': float(median_ed_curr)
-                }, f)
-        except:
-            pass
-
+                json.dump({'median_roic': float(median_roic), 'median_roic_ttm': float(median_roic_ttm), 'median_value': float(median_value), 'median_cfo_ttm': float(median_cfo_ttm), 'median_ed_curr': float(median_ed_curr)}, f)
+        except: pass
         df['Score_ROIC'] = (df['ROIC_5Y'] / median_roic) * 100
         df['Score_ROIC_TTM'] = (df['ROIC_TTM'] / median_roic_ttm) * 100
         df['Score_Value'] = (df['Value_Ratio'] / median_value) * 100
-        
         df['Score_CFO_TTM'] = (df['CFO_Quality_TTM'].clip(upper=3.0) / median_cfo_ttm) * 100
         df.loc[df['CFO_Quality_TTM'] < 0, 'Score_CFO_TTM'] = 0
-        
         df['Score_ED_Current'] = (df['ED_Current'] / median_ed_curr) * 100
-        
-        df['Total Score'] = (df['Score_ROIC'] * 0.15) + (df['Score_ROIC_TTM'] * 0.25) + \
-                            (df['Score_Value'] * 0.20) + \
-                            (df['Score_CFO_TTM'] * 0.20) + \
-                            (df['Score_ED_Current'] * 0.20)
-                            
-        df = df.sort_values(by='Total Score', ascending=False).reset_index(drop=True)
-        df = df.fillna(0)
-        
-        final_results = df.to_dict('records')
-        try:
-            df.to_json(screener_cache_file, orient='records', force_ascii=False)
-        except Exception as e:
-            print("CACHE ERROR:", e)
-        return final_results
+        df['Total Score'] = (df['Score_ROIC'] * 0.15) + (df['Score_ROIC_TTM'] * 0.25) + (df['Score_Value'] * 0.20) + (df['Score_CFO_TTM'] * 0.20) + (df['Score_ED_Current'] * 0.20)
 
+    df = df.sort_values(by='Total Score', ascending=False).reset_index(drop=True).fillna(0)
+    final_results = df.to_dict('records')
+    try:
+        df.to_json(screener_cache_file, orient='records', force_ascii=False)
+    except Exception as e:
+        print("CACHE ERROR:", e)
+        
+    # Clean up partial cache when done
+    try:
+        if os.path.exists(partial_cache_file):
+            os.remove(partial_cache_file)
+    except:
+        pass
+        
+    return final_results
 def get_stock_report(ticker, tax_rate_fallback=0.2):
     try:
         try:

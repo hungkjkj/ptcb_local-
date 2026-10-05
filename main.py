@@ -39,6 +39,8 @@ def get_sectors():
 
 from fastapi import BackgroundTasks
 
+running_tasks = set()
+
 @app.get("/api/screener")
 def run_screener(sector: str, background_tasks: BackgroundTasks):
     try:
@@ -48,15 +50,32 @@ def run_screener(sector: str, background_tasks: BackgroundTasks):
         safe_sector = urllib.parse.quote(sector).replace('%', '_')
         today = datetime.now().strftime("%Y-%m-%d")
         screener_cache_file = os.path.join("cache", f"screener_{safe_sector}_{today}.json")
+        partial_cache_file = os.path.join("cache", f"partial_{safe_sector}_{today}.json")
         
         if os.path.exists(screener_cache_file):
             with open(screener_cache_file, 'r', encoding='utf-8') as f:
                 results = json.load(f)
                 return {"status": "success", "data": results}
         else:
-            # Run in background to prevent Render 100s timeout
-            background_tasks.add_task(quant_screener.run_screener_for_sector, sector)
-            return {"status": "syncing", "data": []}
+            partial_data = []
+            if os.path.exists(partial_cache_file):
+                try:
+                    with open(partial_cache_file, 'r', encoding='utf-8') as f:
+                        partial_data = json.load(f)
+                except:
+                    pass
+                    
+            task_id = f"{safe_sector}_{today}"
+            if task_id not in running_tasks:
+                running_tasks.add(task_id)
+                def bg_task():
+                    try:
+                        quant_screener.run_screener_for_sector(sector)
+                    finally:
+                        running_tasks.discard(task_id)
+                background_tasks.add_task(bg_task)
+                
+            return {"status": "syncing", "data": partial_data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
