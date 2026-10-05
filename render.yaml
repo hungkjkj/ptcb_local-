@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: trader-xuat-chung-app
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12
+      - key: VNSTOCK_API_KEY
+        sync: false
+
+  - type: cron
+    name: trader-cache-cron
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python cron_cache.py"
+    schedule: "1 17 * * *" # 00:01 giờ Việt Nam (UTC+7)
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12
+      - key: VNSTOCK_API_KEY
+        sync: false

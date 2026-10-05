@@ -19,27 +19,18 @@
         "EIB",
         "NAB"
     ],
-    "Bán lẻ": [
-        "MWG",
-        "PNJ",
-        "FRT",
-        "DGW",
-        "PET"
-    ],
-    "Công nghệ thông tin": [
+    "cong nghe": [
         "FPT",
-        "CMG",
-        "ELC",
-        "ITD"
+        "ITD",
+        "CMG"
     ],
-    "Xây dựng và Vật liệu": [
-        "HPG",
-        "HSG",
-        "NKG",
+    "xay dung": [
         "VCG",
+        "CTR",
+        "PC1",
         "CTD",
-        "HBC",
-        "HT1",
-        "BCC"
+        "DPG",
+        "TV2",
+        "FCN"
     ]
 }
