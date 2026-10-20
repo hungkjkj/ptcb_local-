@@ -358,6 +358,193 @@ tbody tr:hover {
     padding: 0.75rem;
 }
 .sector-table td:nth-child(1), .sector-table th:nth-child(1) { width: 50px; text-align: center; }
+.sector-table .sector-median-row td {
+    border-top: 2px solid rgba(56, 189, 248, 0.35);
+    background: rgba(56, 189, 248, 0.08);
+    font-weight: 700;
+    white-space: nowrap;
+}
+.sector-table .sector-median-row .median-label {
+    color: var(--primary-color);
+    text-align: right;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+}
+.sector-table .sector-median-row .median-score {
+    color: #fbbf24;
+}
+.valuation-assumptions-inputs {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    color: #94a3b8;
+    font-size: 0.85rem;
+}
+.valuation-assumptions-inputs input {
+    width: 92px;
+    padding: 0.72rem 0.5rem;
+    text-align: center;
+}
+.valuation-inputs-panel {
+    margin: 1.5rem 0 2rem;
+    padding: 1.25rem;
+    border: 1px solid rgba(56, 189, 248, 0.18);
+}
+.valuation-panel-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+}
+.valuation-panel-heading h3,
+.valuation-inputs-panel > h3 {
+    margin: 0 0 0.35rem;
+    color: var(--primary-color);
+}
+.valuation-panel-heading p,
+.valuation-source-note {
+    margin: 0.35rem 0 0.75rem;
+    color: #94a3b8;
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+.valuation-source-note a {
+    color: var(--primary-color);
+}
+.valuation-status {
+    padding: 0.35rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+.valuation-status.is-ready {
+    color: #6ee7b7;
+    background: rgba(16, 185, 129, 0.12);
+}
+.valuation-status.is-partial {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.1);
+}
+.valuation-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0.65rem;
+    margin: 1rem 0;
+}
+.valuation-metric-card {
+    min-width: 0;
+    padding: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.035);
+}
+.valuation-metric-card span,
+.valuation-metric-card small {
+    display: block;
+    color: #94a3b8;
+    font-size: 0.76rem;
+}
+.valuation-metric-card strong {
+    display: block;
+    margin: 0.28rem 0;
+    color: var(--text-color);
+    font-size: 1.05rem;
+    overflow-wrap: anywhere;
+}
+.valuation-metric-card small {
+    font-size: 0.68rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+.valuation-result-heading {
+    margin-top: 1.2rem;
+}
+.valuation-result-heading h4 {
+    margin: 0 0 0.3rem;
+    color: var(--primary-color);
+    font-size: 1rem;
+}
+.valuation-result-heading p {
+    margin: 0;
+    color: #94a3b8;
+    font-size: 0.82rem;
+    line-height: 1.5;
+}
+.valuation-results-grid .valuation-metric-card:first-child,
+.valuation-results-grid .valuation-metric-card:nth-child(2),
+.valuation-results-grid .valuation-metric-card:nth-child(3) {
+    border-color: rgba(56, 189, 248, 0.22);
+}
+.valuation-results-grid .valuation-metric-card:nth-child(3) strong {
+    color: var(--primary-color);
+}
+.valuation-missing-note,
+.valuation-dcf-note,
+.valuation-sector-note {
+    padding: 0.7rem 0.85rem;
+    border-radius: 8px;
+    color: #fcd34d;
+    background: rgba(245, 158, 11, 0.09);
+    font-size: 0.84rem;
+    line-height: 1.5;
+}
+.valuation-dcf-note.is-ready {
+    color: #6ee7b7;
+    background: rgba(16, 185, 129, 0.1);
+}
+.valuation-sector-note {
+    margin-top: 0.8rem;
+}
+.bank-valuation-grid .valuation-metric-card:nth-child(5),
+.bank-valuation-grid .valuation-metric-card:nth-child(6) {
+  border-color: rgba(56, 189, 248, 0.28);
+}
+.bank-valuation-grid .valuation-metric-card:nth-child(6) strong {
+  color: var(--primary-color);
+}
+.valuation-history-wrap {
+    margin-top: 1rem;
+    overflow-x: auto;
+}
+.valuation-history-table {
+    width: 100%;
+    min-width: 720px;
+    border-collapse: collapse;
+    text-align: right;
+    font-size: 0.85rem;
+}
+.valuation-history-table th,
+.valuation-history-table td {
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    white-space: nowrap;
+}
+.valuation-history-table th {
+    color: #94a3b8;
+    background: rgba(255, 255, 255, 0.04);
+}
+.valuation-history-table th:first-child,
+.valuation-history-table td:first-child {
+    text-align: left;
+}
+.valuation-history-table .fcff-value {
+    color: #6ee7b7;
+    font-weight: 700;
+}
+@media (max-width: 720px) {
+    .valuation-assumptions-inputs {
+        width: 100%;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+    .valuation-panel-heading {
+        flex-direction: column;
+    }
+    .valuation-inputs-panel {
+        padding: 0.9rem;
+    }
+}
 .skeleton-row {
     height: 40px;
     background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%);

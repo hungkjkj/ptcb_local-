@@ -55,7 +55,8 @@ def run_screener(sector: str, background_tasks: BackgroundTasks):
         if os.path.exists(screener_cache_file):
             with open(screener_cache_file, 'r', encoding='utf-8') as f:
                 results = json.load(f)
-                return {"status": "success", "data": results}
+                medians = quant_screener.get_sector_medians(sector)
+                return {"status": "success", "data": results, "medians": medians}
         else:
             partial_data = []
             if os.path.exists(partial_cache_file):
@@ -75,13 +76,14 @@ def run_screener(sector: str, background_tasks: BackgroundTasks):
                         running_tasks.discard(task_id)
                 background_tasks.add_task(bg_task)
                 
-            return {"status": "syncing", "data": partial_data}
+            medians = quant_screener.get_sector_medians(sector)
+            return {"status": "syncing", "data": partial_data, "medians": medians}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 import json
 from pydantic import BaseModel
-from typing import Dict, List
+from typing import Dict, List, Optional
 import subprocess
 
 @app.get("/api/config/sectors")
@@ -123,7 +125,11 @@ def sync_data():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/report")
-def get_report(ticker: str, peers: str = "", taxRate: float = 0.2):
+def get_report(ticker: str, peers: str = "", taxRate: float = 0.2,
+               riskFreeRate: Optional[float] = None,
+               marketRiskPremium: Optional[float] = None,
+               forecastGrowthRate: Optional[float] = None,
+               terminalGrowthRate: Optional[float] = None):
     print(f"API CALL: /api/report?ticker={ticker}&peers={peers}&taxRate={taxRate}")
     try:
         quant_screener.USER_PRIORITY_FLAG.set()
@@ -131,7 +137,15 @@ def get_report(ticker: str, peers: str = "", taxRate: float = 0.2):
             return {"status": "error", "detail": "Thiếu mã cổ phiếu."}
         
         ticker = ticker.upper().strip()
-        result = quant_screener.get_comparative_report(ticker, peers, tax_rate_fallback=taxRate)
+        result = quant_screener.get_comparative_report(
+            ticker,
+            peers,
+            tax_rate_fallback=taxRate,
+            risk_free_rate=riskFreeRate,
+            equity_risk_premium=marketRiskPremium,
+            forecast_growth_rate=forecastGrowthRate,
+            terminal_growth_rate=terminalGrowthRate
+        )
         
         if result.get('status') == 'error':
             return result

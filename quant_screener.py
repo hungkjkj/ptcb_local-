@@ -8,7 +8,7 @@ warnings.filterwarnings('ignore')
 
 import os
 os.environ["CODESPACE_NAME"] = "render_bypass" # Fix bug hosting_service của vnstock trên server Render
-from vnstock import Listing, Finance, Vnstock, Company
+from vnstock import Listing, Finance, Vnstock, Company, Quote
 
 def with_retry(func):
     def wrapper(*args, **kwargs):
@@ -30,6 +30,10 @@ Company.overview = with_retry(Company.overview)
 
 import threading
 USER_PRIORITY_FLAG = threading.Event()
+_QUOTE_HISTORY_CACHE = {}
+_QUOTE_HISTORY_CACHE_LOCK = threading.RLock()
+_VALUATION_ASSUMPTION_CACHE = {}
+_VALUATION_ASSUMPTION_CACHE_LOCK = threading.RLock()
 
 def get_available_sectors():
     """ Trả về danh sách tất cả các ngành nghề trên thị trường. """
@@ -201,6 +205,946 @@ def get_latest_quarter_str(df, keywords):
                         return q
     except: pass
     return ""
+
+
+def _optional_row_value(df, keywords, period_col):
+    """Return a statement value or None when the row/period is unavailable."""
+    if df is None or getattr(df, 'empty', True) or period_col is None:
+        return None
+    if isinstance(keywords, str):
+        keywords = [keywords]
+    try:
+        item_col = df.columns[0]
+        for keyword in keywords:
+            matches = df[df[item_col].astype(str).str.contains(keyword, case=False, na=False, regex=False)]
+            exact = matches[matches[item_col].astype(str).str.strip().str.casefold() == keyword.strip().casefold()]
+            ordered = pd.concat([exact, matches[~matches.index.isin(exact.index)]])
+            for _, row in ordered.iterrows():
+                value = row.get(period_col)
+                if pd.isna(value) or str(value).strip() == '':
+                    continue
+                try:
+                    number = float(value)
+                    if np.isfinite(number):
+                        return number
+                except (TypeError, ValueError):
+                    continue
+    except Exception:
+        pass
+    return None
+
+
+def _period_column(df, year):
+    if df is None or getattr(df, 'empty', True):
+        return None
+    year = str(year)
+    for column in df.columns:
+        label = str(column)
+        if label == year or (label.startswith(year + '-') and '-Q' not in label.upper()):
+            return column
+    return None
+
+
+def _quarter_columns(df):
+    if df is None or getattr(df, 'empty', True):
+        return []
+    columns = [column for column in df.columns if '-Q' in str(column).upper()]
+    return sorted(columns, key=lambda column: str(column), reverse=True)
+
+
+def _market_cap_to_vnd(value):
+    """Normalize VCI overview market cap to VND, matching the existing P/B logic."""
+    try:
+        value = float(value)
+        if not np.isfinite(value) or value <= 0:
+            return None
+        return value * 1e9 if value < 1_000_000 else value
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_interest_bearing_debt(df, period_col):
+    short_debt = _optional_row_value(df, [
+        'Vay và nợ thuê tài chính ngắn hạn', 'Vay ngắn hạn',
+        'Nợ vay ngắn hạn', 'Short-term borrowings'
+    ], period_col)
+    long_debt = _optional_row_value(df, [
+        'Vay và nợ thuê tài chính dài hạn', 'Vay dài hạn',
+        'Nợ vay dài hạn', 'Long-term borrowings'
+    ], period_col)
+    if short_debt is not None and long_debt is not None:
+        return short_debt + long_debt, short_debt
+    total_debt = _optional_row_value(df, [
+        'Tổng vay và nợ thuê tài chính', 'Tổng nợ vay',
+        'Total interest-bearing debt', 'Total borrowings'
+    ], period_col)
+    return total_debt, short_debt
+
+
+def _build_nonfinancial_valuation_inputs(df_is, df_cf, df_bs, years_cols,
+                                        market_cap, current_price, tax_rate_fallback,
+                                        df_is_q=None, df_bs_q=None):
+    """Build historical FCFF inputs and capital structure from raw statements.
+
+    Missing statement rows remain null so the UI can distinguish unavailable data
+    from genuine zero values.
+    """
+    import re
+    raw_years = {}
+    for column in years_cols:
+        if '-Q' in str(column).upper():
+            continue
+        match = re.search(r'20\d{2}', str(column))
+        if match:
+            raw_years[int(match.group(0))] = str(match.group(0))
+    years = sorted(raw_years)[-5:]
+    fallback_tax_rate = tax_rate_fallback if tax_rate_fallback is not None and 0 <= tax_rate_fallback <= 1 else None
+
+    annual = []
+    for year in years:
+        year_str = str(year)
+        is_col = _period_column(df_is, year_str) or year_str
+        cf_col = _period_column(df_cf, year_str)
+        bs_col = _period_column(df_bs, year_str)
+
+        ebit = _optional_row_value(df_is, [
+            'Lợi nhuận thuần từ hoạt động kinh doanh',
+            'Lãi/(lỗ) từ hoạt động kinh doanh',
+            'Operating profit', 'Profit from operating activities'
+        ], is_col)
+        ebt = _optional_row_value(df_is, [
+            'Lãi/(lỗ) trước thuế', 'Tổng lợi nhuận kế toán trước thuế',
+            'Lợi nhuận trước thuế', 'Profit before tax'
+        ], is_col)
+        net_income = _optional_row_value(df_is, [
+            'Lợi nhuận sau thuế của cổ đông công ty mẹ',
+            'Lãi/(lỗ) thuần sau thuế', 'Lợi nhuận sau thuế', 'Net income'
+        ], is_col)
+        tax_expense = _optional_row_value(df_is, [
+            'Tổng chi phí thuế thu nhập doanh nghiệp',
+            'Income tax expense'
+        ], is_col)
+        if tax_expense is None:
+            current_tax = _optional_row_value(df_is, [
+                'Chi phí thuế thu nhập doanh nghiệp hiện hành', 'Current income tax'
+            ], is_col)
+            deferred_tax = _optional_row_value(df_is, [
+                'Chi phí thuế thu nhập doanh nghiệp hoãn lại', 'Deferred income tax'
+            ], is_col)
+            if current_tax is not None or deferred_tax is not None:
+                tax_expense = (current_tax or 0) + (deferred_tax or 0)
+
+        effective_tax = tax_expense / ebt if tax_expense is not None and ebt and ebt > 0 else None
+        if effective_tax is not None and not 0 <= effective_tax <= 1:
+            effective_tax = None
+        tax_for_fcff = effective_tax if effective_tax is not None else fallback_tax_rate
+        tax_basis = 'reported_effective_rate' if effective_tax is not None else ('user_tax_input_fallback' if fallback_tax_rate is not None else None)
+
+        da = _optional_row_value(df_cf, [
+            'Khấu hao tài sản cố định và bất động sản đầu tư',
+            'Khấu hao tài sản cố định', 'Khấu hao TSCĐ', 'Khấu hao và phân bổ', 'Khấu hao',
+            'Depreciation and amortisation', 'Depreciation and amortization',
+            'Depreciation', 'Amortization'
+        ], cf_col)
+        capex = _optional_row_value(df_cf, [
+            'Tiền chi để mua sắm, xây dựng tài sản cố định',
+            'Tiền chi để mua sắm, xây dựng TSCĐ',
+            'Chi mua sắm tài sản cố định', 'Chi mua sắm TSCĐ',
+            'Mua sắm, xây dựng tài sản cố định',
+            'Purchase and construction of fixed assets',
+            'Payments for purchase or construction of fixed assets'
+        ], cf_col)
+        if da is not None:
+            da = abs(da)
+        if capex is not None:
+            capex = abs(capex)
+
+        current_assets = _optional_row_value(df_bs, [
+            'Tổng cộng tài sản ngắn hạn', 'Tổng tài sản ngắn hạn',
+            'Tài sản ngắn hạn', 'Current assets'
+        ], bs_col)
+        current_liabilities = _optional_row_value(df_bs, [
+            'Tổng nợ ngắn hạn', 'Nợ ngắn hạn', 'Current liabilities'
+        ], bs_col)
+        cash = _optional_row_value(df_bs, [
+            'Tiền và các khoản tương đương tiền', 'Tiền và tương đương tiền',
+            'Cash and cash equivalents'
+        ], bs_col)
+        short_investments = _optional_row_value(df_bs, [
+            'Đầu tư tài chính ngắn hạn', 'Short-term investments'
+        ], bs_col)
+        interest_bearing_debt, short_debt = _read_interest_bearing_debt(df_bs, bs_col)
+
+        nwc = None
+        nwc_missing_inputs = [
+            key for key, value in (
+                ('current_assets', current_assets), ('cash', cash),
+                ('short_term_investments', short_investments),
+                ('current_liabilities', current_liabilities), ('short_term_debt', short_debt)
+            ) if value is None
+        ]
+        if not nwc_missing_inputs:
+            operating_current_assets = current_assets - cash - short_investments
+            operating_current_liabilities = current_liabilities - short_debt
+            nwc = operating_current_assets - operating_current_liabilities
+
+        nopat = ebit * (1 - tax_for_fcff) if ebit is not None and tax_for_fcff is not None else None
+        annual.append({
+            'year': year,
+            'ebit': ebit,
+            'net_income': net_income,
+            'tax_expense': tax_expense,
+            'effective_tax_rate': effective_tax,
+            'tax_rate_used_for_fcff': tax_for_fcff,
+            'tax_rate_basis': tax_basis,
+            'da': da,
+            'capex': capex,
+            'cash': cash,
+            'interest_bearing_debt': interest_bearing_debt,
+            'nwc': nwc,
+            'nwc_missing_inputs': nwc_missing_inputs,
+            'delta_nwc': None,
+            'nopat': nopat,
+            'fcff': None,
+            'fcff_missing_inputs': []
+        })
+
+    by_year = {row['year']: row for row in annual}
+    for row in annual:
+        previous = by_year.get(row['year'] - 1)
+        if row['nwc'] is not None and previous and previous['nwc'] is not None:
+            row['delta_nwc'] = row['nwc'] - previous['nwc']
+        missing = [key for key in ('ebit', 'da', 'capex', 'delta_nwc', 'nopat') if row[key] is None]
+        row['fcff_missing_inputs'] = missing
+        if not missing:
+            row['fcff'] = row['nopat'] + row['da'] - row['capex'] - row['delta_nwc']
+
+    latest = annual[-1] if annual else {}
+    prior = annual[-2] if len(annual) > 1 else {}
+    latest_interest = None
+    latest_interest_year = None
+    for year in reversed(years):
+        col = _period_column(df_is, str(year)) or str(year)
+        interest = _optional_row_value(df_is, ['Chi phí lãi vay', 'Interest expense'], col)
+        if interest is not None:
+            latest_interest = abs(interest)
+            latest_interest_year = year
+            break
+
+    q_cols = _quarter_columns(df_bs_q)
+    latest_q_col = q_cols[0] if q_cols else None
+    comparable_q_col = q_cols[4] if len(q_cols) > 4 else None
+    quarter_debt_now = quarter_debt_prev = quarter_cash = None
+    if latest_q_col:
+        quarter_debt_now, _ = _read_interest_bearing_debt(df_bs_q, latest_q_col)
+        quarter_cash = _optional_row_value(df_bs_q, [
+            'Tiền và các khoản tương đương tiền', 'Tiền và tương đương tiền',
+            'Cash and cash equivalents'
+        ], latest_q_col)
+        if comparable_q_col:
+            quarter_debt_prev, _ = _read_interest_bearing_debt(df_bs_q, comparable_q_col)
+
+    debt_now = quarter_debt_now if quarter_debt_now is not None else latest.get('interest_bearing_debt')
+    debt_prev = quarter_debt_prev if quarter_debt_prev is not None else prior.get('interest_bearing_debt')
+    if df_is_q is not None and not df_is_q.empty:
+        interest_ttm = get_ttm_value(df_is_q, ['Chi phí lãi vay', 'Interest expense'])
+        if interest_ttm:
+            latest_interest = abs(interest_ttm)
+            latest_interest_year = 'TTM'
+
+    average_debt = None
+    if debt_now is not None and debt_prev is not None:
+        average_debt = (debt_now + debt_prev) / 2
+    elif debt_now is not None:
+        average_debt = debt_now
+    cost_of_debt = latest_interest / average_debt if latest_interest is not None and average_debt and average_debt > 0 else None
+
+    market_equity = _market_cap_to_vnd(market_cap)
+    current_cash = quarter_cash if quarter_cash is not None else latest.get('cash')
+    shares_estimate = None
+    try:
+        if market_equity and current_price and float(current_price) > 0:
+            shares_estimate = market_equity / float(current_price)
+    except (TypeError, ValueError):
+        pass
+
+    return {
+        'model': 'fcff',
+        'status': 'partial',
+        'currency': 'VND',
+        'amount_unit': 'VND',
+        'financial_statement_source': 'Vnstock VCI',
+        'history': annual,
+        'capital_structure': {
+            'market_equity_value': market_equity,
+            'interest_bearing_debt': debt_now,
+            'debt_as_of_period': latest_q_col if quarter_debt_now is not None else (str(latest.get('year')) if debt_now is not None else None),
+            'cash_and_equivalents': current_cash,
+            'cash_as_of_period': latest_q_col if quarter_cash is not None else (str(latest.get('year')) if current_cash is not None else None),
+            'net_debt': debt_now - current_cash if debt_now is not None and current_cash is not None else None,
+            'current_share_price': float(current_price) if current_price is not None and float(current_price) > 0 else None,
+            'shares_outstanding_estimate': shares_estimate,
+            'shares_estimate_basis': 'market_cap_divided_by_current_price' if shares_estimate is not None else None,
+            'interest_expense': latest_interest,
+            'interest_expense_year': latest_interest_year,
+            'average_interest_bearing_debt': average_debt,
+            'cost_of_debt': cost_of_debt,
+            'cost_of_debt_basis': 'Lãi vay TTM ÷ nợ vay chịu lãi bình quân' if cost_of_debt is not None else None
+        },
+        'wacc': {
+            'risk_free_rate': None,
+            'equity_risk_premium': None,
+            'beta': None,
+            'cost_of_equity': None,
+            'tax_rate': None,
+            'equity_weight': None,
+            'debt_weight': None,
+            'value': None,
+            'missing_inputs': ['beta', 'risk_free_rate', 'equity_risk_premium', 'market_equity_value', 'interest_bearing_debt'],
+            'status': 'not_calculated'
+        },
+        'sources': {
+            'risk_free_rate': 'HNX Vietnam Government Bond 10Y yield; auto through Vnstock Macro when available, otherwise enter in the report controls',
+            'equity_risk_premium': 'Automatically fetched from Damodaran current workbook as Vietnam rating-based total ERP; manual override is optional',
+            'beta': 'Calculated from 3-year daily ticker returns against VNINDEX'
+        }
+    }
+
+
+def _quote_close_series(symbol):
+    """Get a cached daily close series, trying the supported VCI and KBS feeds."""
+    from datetime import datetime, timedelta
+    import pandas as pd
+
+    now = time.time()
+    with _QUOTE_HISTORY_CACHE_LOCK:
+        cached = _QUOTE_HISTORY_CACHE.get(symbol)
+        if cached and now - cached['fetched_at'] < 3600:
+            return cached['series'].copy()
+
+    end = datetime.now().strftime('%Y-%m-%d')
+    start = (datetime.now() - timedelta(days=365 * 3 + 10)).strftime('%Y-%m-%d')
+    for source in ('VCI', 'KBS'):
+        try:
+            frame = Quote(source=source, symbol=symbol).history(start=start, end=end, interval='1D')
+            if frame is None or frame.empty:
+                continue
+            columns = {str(col).lower(): col for col in frame.columns}
+            date_col = next((columns[key] for key in ('time', 'date', 'trading_date') if key in columns), None)
+            price_col = next((columns[key] for key in ('adj_close', 'close', 'close_price') if key in columns), None)
+            if date_col is None or price_col is None:
+                continue
+            series = pd.Series(pd.to_numeric(frame[price_col], errors='coerce').values,
+                               index=pd.to_datetime(frame[date_col], errors='coerce').dt.normalize())
+            series = series[~series.index.isna()].dropna().groupby(level=0).last().sort_index()
+            if len(series) < 2:
+                continue
+            with _QUOTE_HISTORY_CACHE_LOCK:
+                _QUOTE_HISTORY_CACHE[symbol] = {'fetched_at': time.time(), 'series': series}
+            return series.copy()
+        except Exception as exc:
+            print(f'Không lấy được lịch sử giá {symbol} từ {source}: {str(exc)[:120]}')
+    return None
+
+
+def _calculate_market_beta(ticker):
+    """Estimate beta from overlapping daily returns; never substitute a fixed beta."""
+    try:
+        import pandas as pd
+        stock = _quote_close_series(ticker)
+        market = _quote_close_series('VNINDEX')
+        if stock is None or market is None:
+            return None
+        returns = pd.concat([stock.pct_change(), market.pct_change()], axis=1, join='inner').dropna()
+        returns = returns.replace([np.inf, -np.inf], np.nan).dropna()
+        if len(returns) < 60 or returns.iloc[:, 1].var() <= 0:
+            return None
+        beta = returns.iloc[:, 0].cov(returns.iloc[:, 1]) / returns.iloc[:, 1].var()
+        return float(beta) if np.isfinite(beta) else None
+    except Exception as exc:
+        print(f'Không tính được beta cho {ticker}: {str(exc)[:120]}')
+        return None
+
+
+def _fetch_damodaran_erp():
+    """Fetch Vietnam's rating-based total ERP from Damodaran's current workbook."""
+    import requests
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from datetime import datetime
+
+    cache_key = 'damodaran_vietnam_total_erp'
+    now = time.time()
+    with _VALUATION_ASSUMPTION_CACHE_LOCK:
+        cached = _VALUATION_ASSUMPTION_CACHE.get(cache_key)
+        if cached and now - cached['fetched_at'] < (86400 if cached.get('value') is not None else 1800):
+            return cached.get('value'), cached.get('as_of')
+
+    try:
+        response = requests.get(
+            'https://pages.stern.nyu.edu/~adamodar/pc/datasets/ctryprem.xlsx',
+            timeout=8
+        )
+        response.raise_for_status()
+        workbook = load_workbook(BytesIO(response.content), read_only=True, data_only=True)
+        sheet = workbook['ERPs by country']
+        rows = sheet.iter_rows(values_only=True)
+        header = None
+        data_rows = []
+        for row in rows:
+            if header is None and row and any(str(value).strip() == 'Country' for value in row if value is not None):
+                header = list(row)
+                continue
+            if header is not None:
+                data_rows.append(row)
+        country_col = next(i for i, value in enumerate(header) if str(value).strip() == 'Country')
+        erp_col = next(i for i, value in enumerate(header) if str(value).strip() == 'Total Equity Risk Premium')
+        vietnam_row = next(row for row in data_rows if str(row[country_col]).strip().casefold() == 'vietnam')
+        value = float(vietnam_row[erp_col])
+
+        as_of = None
+        update_sheet = workbook['ERPs by country']
+        update_date = update_sheet.cell(row=2, column=2).value
+        if isinstance(update_date, datetime):
+            as_of = update_date.date().isoformat()
+        elif update_date:
+            as_of = str(update_date)
+
+        result = (value, as_of)
+    except Exception as exc:
+        print(f'Không tải được ERP Damodaran: {str(exc)[:160]}')
+        result = (None, None)
+
+    with _VALUATION_ASSUMPTION_CACHE_LOCK:
+        _VALUATION_ASSUMPTION_CACHE[cache_key] = {
+            'fetched_at': time.time(), 'value': result[0], 'as_of': result[1]
+        }
+    return result
+
+
+def _fetch_vn_10y_risk_free_rate():
+    """Use Vnstock's Macro route when installed; older versions need manual HNX input."""
+    try:
+        from vnstock import Macro
+        macro = Macro()
+        global_macro = getattr(macro, 'global_macro', None) or getattr(macro, 'world', None)
+        if global_macro is None:
+            return None, None
+        frame = global_macro.bond_yield(market='VN', tenor='10Y', length='30D')
+        if frame is None or frame.empty:
+            return None, None
+        columns = {str(col).lower(): col for col in frame.columns}
+        value_col = next((columns[key] for key in ('close', 'yield', 'value') if key in columns), None)
+        date_col = next((columns[key] for key in ('time', 'date') if key in columns), None)
+        if value_col is None:
+            return None, None
+        values = pd.to_numeric(frame[value_col], errors='coerce').dropna()
+        if values.empty:
+            return None, None
+        value = float(values.iloc[-1])
+        if value > 1:
+            value /= 100
+        as_of = str(frame.iloc[-1][date_col])[:10] if date_col else None
+        return (value, as_of) if 0 <= value <= 1 else (None, None)
+    except ImportError:
+        return None, None
+    except Exception as exc:
+        print(f'Không tự lấy được lợi suất TPCP Việt Nam 10Y: {str(exc)[:160]}')
+        return None, None
+
+
+def _estimate_historical_fcff_cagr(history, minimum_points=2):
+    """Estimate CAGR from valid positive FCFF points, allowing missing years."""
+    valid_points = []
+    for row in sorted(history or [], key=lambda item: item.get('year') or 0):
+        try:
+            year = int(row.get('year'))
+            fcff = float(row.get('fcff'))
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(fcff) and fcff > 0:
+            valid_points.append({'year': year, 'fcff': fcff})
+
+    if len(valid_points) == 1:
+        year = valid_points[0]['year']
+        return {
+            'rate': 0.0, 'source': 'flat_fcff_fallback',
+            'start_year': year, 'end_year': year, 'points': 1
+        }
+    if len(valid_points) < minimum_points:
+        return {
+            'rate': None, 'source': 'unavailable',
+            'start_year': None, 'end_year': None, 'points': len(valid_points)
+        }
+    first, last = valid_points[0], valid_points[-1]
+    periods = last['year'] - first['year']
+    if periods <= 0:
+        return {
+            'rate': None, 'source': 'unavailable',
+            'start_year': None, 'end_year': None, 'points': len(valid_points)
+        }
+    rate = (last['fcff'] / first['fcff']) ** (1 / periods) - 1
+    if not np.isfinite(rate):
+        rate = None
+    return {
+        'rate': rate,
+        'source': 'historical_fcff_cagr' if rate is not None else 'unavailable',
+        'start_year': first['year'],
+        'end_year': last['year'],
+        'points': len(valid_points)
+    }
+
+
+def _calculate_wacc_inputs(valuation, ticker, risk_free_rate, equity_risk_premium, tax_rate,
+                           forecast_growth_rate=None, terminal_growth_rate=None):
+    if not valuation or valuation.get('model') != 'fcff':
+        return
+    for name, rate in (('forecast_growth_rate', forecast_growth_rate),
+                       ('terminal_growth_rate', terminal_growth_rate)):
+        if rate is not None and not np.isfinite(rate):
+            if name == 'forecast_growth_rate':
+                forecast_growth_rate = None
+            else:
+                terminal_growth_rate = None
+    risk_free_as_of = None
+    risk_free_source = 'HNX 10Y yield entered manually'
+    if risk_free_rate is None:
+        risk_free_rate, risk_free_as_of = _fetch_vn_10y_risk_free_rate()
+        if risk_free_rate is not None:
+            risk_free_source = 'Vnstock Macro, Vietnam Government Bond 10Y'
+    else:
+        risk_free_source = 'User-provided HNX 10Y override'
+
+    erp_as_of = None
+    erp_source = 'Damodaran current country-premium workbook (rating-based total ERP)'
+    if equity_risk_premium is None:
+        equity_risk_premium, erp_as_of = _fetch_damodaran_erp()
+    else:
+        erp_source = 'User-provided ERP override'
+
+    if risk_free_rate is not None and not 0 <= risk_free_rate <= 1:
+        risk_free_rate = None
+    if equity_risk_premium is not None and not 0 <= equity_risk_premium <= 1:
+        equity_risk_premium = None
+    beta = _calculate_market_beta(ticker)
+    capital = valuation.get('capital_structure', {})
+    wacc = valuation.get('wacc', {})
+    market_equity = capital.get('market_equity_value')
+    debt = capital.get('interest_bearing_debt')
+    cost_of_debt = capital.get('cost_of_debt')
+    usable_tax = tax_rate if tax_rate is not None and 0 <= tax_rate <= 1 else None
+
+    cost_of_equity = None
+    if risk_free_rate is not None and equity_risk_premium is not None and beta is not None:
+        cost_of_equity = risk_free_rate + beta * equity_risk_premium
+
+    equity_weight = debt_weight = None
+    if market_equity is not None and debt is not None and market_equity + debt > 0:
+        total_capital = market_equity + debt
+        equity_weight = market_equity / total_capital
+        debt_weight = debt / total_capital
+
+    value = None
+    if equity_weight is not None and cost_of_equity is not None and usable_tax is not None:
+        if debt_weight == 0:
+            value = cost_of_equity
+        elif cost_of_debt is not None:
+            value = equity_weight * cost_of_equity + debt_weight * cost_of_debt * (1 - usable_tax)
+
+    missing = []
+    for key, item in (
+        ('beta', beta), ('risk_free_rate', risk_free_rate),
+        ('equity_risk_premium', equity_risk_premium),
+        ('market_equity_value', market_equity), ('interest_bearing_debt', debt),
+        ('tax_rate', usable_tax)
+    ):
+        if item is None:
+            missing.append(key)
+    if debt not in (None, 0) and cost_of_debt is None:
+        missing.append('cost_of_debt')
+
+    wacc.update({
+        'beta': beta,
+        'risk_free_rate': risk_free_rate,
+        'equity_risk_premium': equity_risk_premium,
+        'cost_of_equity': cost_of_equity,
+        'tax_rate': usable_tax,
+        'equity_weight': equity_weight,
+        'debt_weight': debt_weight,
+        'value': value,
+        'missing_inputs': missing,
+        'status': 'ready' if value is not None else 'partial',
+        'tax_rate_basis': 'user_tax_rate_input' if usable_tax is not None else None,
+        'risk_free_rate_source': risk_free_source,
+        'risk_free_rate_as_of': risk_free_as_of,
+        'equity_risk_premium_source': erp_source,
+        'equity_risk_premium_as_of': erp_as_of
+    })
+    valuation['status'] = 'ready' if value is not None else 'partial'
+
+    history = valuation.get('history', [])
+    historical_growth = _estimate_historical_fcff_cagr(history)
+    historical_growth_rate = historical_growth['rate']
+    forecast_growth_source = 'user_input' if forecast_growth_rate is not None else historical_growth['source']
+    terminal_growth_source = 'user_input' if terminal_growth_rate is not None else historical_growth['source']
+    base_row = next((row for row in reversed(history)
+                     if isinstance(row.get('fcff'), (int, float))
+                     and np.isfinite(row['fcff']) and row['fcff'] > 0), None)
+    base_fcff_assumptions = []
+    if base_row is None:
+        # Keep a clearly labeled fallback for reports missing only D&A and/or ΔNWC.
+        # These inputs are assumed to be zero for this scenario, never written back as historical data.
+        for row in reversed(history):
+            nopat = row.get('nopat')
+            capex = row.get('capex')
+            if not all(isinstance(item, (int, float)) and np.isfinite(item) for item in (nopat, capex)):
+                continue
+            da = row.get('da')
+            delta_nwc = row.get('delta_nwc')
+            assumptions = []
+            if da is None:
+                da = 0.0
+                assumptions.append('D&A = 0 do thiếu dữ liệu')
+            elif not isinstance(da, (int, float)) or not np.isfinite(da):
+                continue
+            if delta_nwc is None:
+                delta_nwc = 0.0
+                assumptions.append('ΔNWC = 0 do thiếu dữ liệu')
+            elif not isinstance(delta_nwc, (int, float)) or not np.isfinite(delta_nwc):
+                continue
+            scenario_fcff = float(nopat) + float(da) - float(capex) - float(delta_nwc)
+            if scenario_fcff > 0:
+                base_row = {**row, 'fcff': scenario_fcff}
+                base_fcff_assumptions = assumptions
+                break
+    if forecast_growth_rate is None:
+        forecast_growth_rate = historical_growth_rate
+        if forecast_growth_rate is None and base_fcff_assumptions:
+            forecast_growth_rate = 0.0
+            forecast_growth_source = 'flat_fcff_fallback'
+    if terminal_growth_rate is None:
+        terminal_growth_rate = historical_growth_rate
+        if terminal_growth_rate is None and base_fcff_assumptions:
+            terminal_growth_rate = 0.0
+            terminal_growth_source = 'flat_fcff_fallback'
+    if (terminal_growth_rate is not None and terminal_growth_source == 'historical_fcff_cagr'
+            and value is not None and terminal_growth_rate >= value and value > 0):
+        terminal_growth_rate = 0.0
+        terminal_growth_source = 'flat_terminal_fallback'
+    if forecast_growth_source == 'historical_fcff_cagr' and forecast_growth_rate is not None and forecast_growth_rate > 1:
+        forecast_growth_rate = 0.0
+        forecast_growth_source = 'flat_fcff_fallback'
+    latest_history_row = history[-1] if history else {}
+    fcff_field_labels = {
+        'ebit': 'EBIT / lợi nhuận hoạt động',
+        'nopat': 'NOPAT (cần EBIT và thuế suất)',
+        'da': 'D&A / khấu hao và phân bổ',
+        'capex': 'CapEx / chi đầu tư tài sản cố định',
+        'delta_nwc': 'ΔNWC (cần NWC năm hiện tại và năm trước)'
+    }
+    fcff_missing_keys = set(latest_history_row.get('fcff_missing_inputs', []))
+    if 'ebit' in fcff_missing_keys:
+        fcff_missing_keys.discard('nopat')
+    fcff_missing_components = [
+        fcff_field_labels[key] for key in ('ebit', 'nopat', 'da', 'capex', 'delta_nwc')
+        if key in fcff_missing_keys
+    ]
+    dcf = {
+        'status': 'not_calculated',
+        'forecast_years': 5,
+        'forecast_growth_rate': forecast_growth_rate,
+        'forecast_growth_rate_source': forecast_growth_source if forecast_growth_rate is not None else 'unavailable',
+        'terminal_growth_rate': terminal_growth_rate,
+        'terminal_growth_rate_source': terminal_growth_source if terminal_growth_rate is not None else 'unavailable',
+        'historical_growth_start_year': historical_growth.get('start_year'),
+        'historical_growth_end_year': historical_growth.get('end_year'),
+        'historical_growth_points': historical_growth.get('points', 0),
+        'growth_method_version': 2,
+        'base_fcff': base_row.get('fcff') if base_row else None,
+        'base_fcff_year': base_row.get('year') if base_row else None,
+        'base_fcff_source': 'zero_missing_inputs_scenario' if base_fcff_assumptions else ('historical_fcff' if base_row else None),
+        'base_fcff_assumptions': base_fcff_assumptions,
+        'fcff_missing_components': fcff_missing_components,
+        'enterprise_value': None,
+        'equity_value': None,
+        'intrinsic_value_per_share': None,
+        'current_share_price': capital.get('current_share_price'),
+        'upside': None,
+        'missing_inputs': [],
+        'message': None
+    }
+    core_reasons = []
+    if forecast_growth_rate is None:
+        core_reasons.append('Chưa có năm nào có FCFF dương và đủ đầu vào làm cơ sở; hãy bổ sung dữ liệu FCFF hoặc nhập g 5 năm.')
+    elif not -1 < forecast_growth_rate <= 1:
+        core_reasons.append('Tốc độ tăng trưởng 5 năm phải lớn hơn -100% và không quá 100%.')
+    if terminal_growth_rate is None:
+        core_reasons.append('Chưa có FCFF dương hợp lệ để tự tính g dài hạn; hãy bổ sung dữ liệu hoặc nhập g dài hạn.')
+    elif not -1 < terminal_growth_rate <= 1:
+        core_reasons.append('Tốc độ tăng trưởng dài hạn phải lớn hơn -100% và không quá 100%.')
+    if base_row is None:
+        if fcff_missing_components:
+            core_reasons.append('FCFF gần nhất chưa tính được; thiếu: ' + ', '.join(fcff_missing_components) + '.')
+        else:
+            core_reasons.append('Không có FCFF lịch sử đầy đủ để làm cơ sở dự phóng; kiểm tra EBIT, D&A, CapEx và ΔNWC.')
+    if value is None:
+        core_reasons.append('WACC chưa tính được đầy đủ.')
+    elif value <= -1:
+        core_reasons.append('WACC phải lớn hơn -100%.')
+    elif terminal_growth_rate is not None and terminal_growth_rate >= value:
+        core_reasons.append('Tăng trưởng dài hạn phải thấp hơn WACC.')
+    reasons = list(core_reasons)
+    if capital.get('interest_bearing_debt') is None:
+        reasons.append('Thiếu số nợ vay chịu lãi để tính giá trị vốn chủ.')
+    if capital.get('cash_and_equivalents') is None:
+        reasons.append('Thiếu số tiền mặt để tính giá trị vốn chủ.')
+    if capital.get('shares_outstanding_estimate') is None:
+        reasons.append('Thiếu dữ liệu để ước tính số cổ phiếu lưu hành.')
+
+    dcf['missing_inputs'] = reasons
+    if not core_reasons:
+        base_fcff = float(base_row['fcff'])
+        growth = float(forecast_growth_rate)
+        terminal_growth = float(terminal_growth_rate)
+        forecast_fcff = [base_fcff * (1 + growth) ** year for year in range(1, 6)]
+        discount_rate = float(value)
+        pv_forecast = sum(cash_flow / (1 + discount_rate) ** year
+                          for year, cash_flow in enumerate(forecast_fcff, start=1))
+        terminal_value = forecast_fcff[-1] * (1 + terminal_growth) / (discount_rate - terminal_growth)
+        enterprise_value = pv_forecast + terminal_value / (1 + discount_rate) ** 5
+        dcf['enterprise_value'] = enterprise_value
+        debt = capital.get('interest_bearing_debt')
+        cash = capital.get('cash_and_equivalents')
+        if debt is not None and cash is not None:
+            equity_value = enterprise_value + float(cash) - float(debt)
+            dcf['equity_value'] = equity_value
+            shares = capital.get('shares_outstanding_estimate')
+            if shares is not None and float(shares) > 0:
+                dcf['intrinsic_value_per_share'] = equity_value / float(shares)
+                current_price = capital.get('current_share_price')
+                if current_price is not None and float(current_price) > 0:
+                    dcf['upside'] = (dcf['intrinsic_value_per_share'] / float(current_price)) - 1
+        dcf['status'] = 'ready' if dcf['intrinsic_value_per_share'] is not None else 'partial'
+        notes = []
+        if base_fcff_assumptions:
+            notes.append('FCFF cơ sở là kịch bản tham khảo từ năm ' + str(base_row.get('year'))
+                         + ': ' + '; '.join(base_fcff_assumptions)
+                         + '. Không ghi các giả định này thành dữ liệu lịch sử.')
+        if historical_growth.get('points', 0) == 1 and (
+                forecast_growth_source == 'flat_fcff_fallback' or terminal_growth_source == 'flat_fcff_fallback'):
+            notes.append('Chỉ có một năm FCFF dương hợp lệ nên g tự động dùng kịch bản FCFF đi ngang 0%; bạn có thể nhập g để ghi đè.')
+        elif base_fcff_assumptions and historical_growth.get('points', 0) == 0:
+            notes.append('Chưa có chuỗi FCFF lịch sử đầy đủ nên g mặc định 0% để hiện kịch bản đi ngang; bạn có thể nhập g để ghi đè.')
+        elif forecast_growth_source == 'flat_fcff_fallback':
+            notes.append('CAGR FCFF lịch sử vượt phạm vi hợp lý nên g 5 năm tự động dùng kịch bản đi ngang 0%; bạn có thể nhập g để ghi đè.')
+        if terminal_growth_source == 'flat_terminal_fallback':
+            notes.append('CAGR FCFF lịch sử không thấp hơn WACC nên g dài hạn tự động dùng kịch bản 0%; bạn có thể nhập g để ghi đè.')
+        if base_row and history and base_row.get('year') != history[-1].get('year') and not base_fcff_assumptions:
+            notes.append(f"FCFF cơ sở lấy từ năm {base_row.get('year')} gần nhất có FCFF dương và đủ đầu vào; các năm sau thiếu hoặc không có FCFF dương được bỏ qua.")
+        if dcf['status'] == 'partial':
+            notes.append('Đã tính EV; thiếu dữ liệu để quy đổi đầy đủ sang giá trị mỗi cổ phiếu.')
+        dcf['message'] = ' '.join(notes) or 'Ước tính DCF từ FCFF dương gần nhất và các giả định tăng trưởng; các năm thiếu dữ liệu được bỏ qua.'
+    else:
+        dcf['message'] = 'Chưa thể tính giá trị nội tại: ' + ' '.join(core_reasons)
+    valuation['dcf'] = dcf
+
+
+def _calculate_bank_residual_income(valuation, ticker, risk_free_rate=None,
+                                    equity_risk_premium=None, forecast_growth_rate=None,
+                                    terminal_growth_rate=None):
+    """Value a bank as book equity plus discounted residual income to shareholders."""
+    if not valuation or valuation.get('model') != 'bank_residual_income':
+        return
+
+    risk_free_as_of = None
+    risk_free_source = 'HNX 10Y yield entered manually'
+    if risk_free_rate is None:
+        risk_free_rate, risk_free_as_of = _fetch_vn_10y_risk_free_rate()
+        risk_free_source = 'Vnstock Macro, Vietnam Government Bond 10Y' if risk_free_rate is not None else 'unavailable'
+    else:
+        risk_free_source = 'User-provided HNX 10Y override'
+
+    erp_as_of = None
+    erp_source = 'Damodaran current country-premium workbook (rating-based total ERP)'
+    if equity_risk_premium is None:
+        equity_risk_premium, erp_as_of = _fetch_damodaran_erp()
+        if equity_risk_premium is None:
+            erp_source = 'unavailable'
+    else:
+        erp_source = 'User-provided ERP override'
+
+    if risk_free_rate is not None and (not np.isfinite(risk_free_rate) or not 0 <= risk_free_rate <= 1):
+        risk_free_rate = None
+    if equity_risk_premium is not None and (not np.isfinite(equity_risk_premium) or not 0 <= equity_risk_premium <= 1):
+        equity_risk_premium = None
+    beta = _calculate_market_beta(ticker)
+    cost_of_equity = risk_free_rate + beta * equity_risk_premium if (
+        risk_free_rate is not None and equity_risk_premium is not None and beta is not None
+    ) else None
+
+    capital = valuation.get('capital_structure', {})
+    history = sorted(valuation.get('history', []), key=lambda row: row.get('year') or 0)
+    book_equity = capital.get('book_equity')
+    shares = capital.get('shares_outstanding_estimate')
+    current_price = capital.get('current_share_price')
+    market_cap = capital.get('market_equity_value')
+    book_history = [row for row in history if isinstance(row.get('book_equity'), (int, float))
+                    and np.isfinite(row['book_equity']) and row['book_equity'] > 0]
+    if book_equity is None or not isinstance(book_equity, (int, float)) or not np.isfinite(book_equity):
+        book_equity = book_history[-1]['book_equity'] if book_history else None
+        if book_equity is not None:
+            capital['book_equity'] = book_equity
+            capital['book_equity_as_of'] = str(book_history[-1]['year'])
+
+    historical_book_growth = None
+    if len(book_history) >= 2:
+        first, last = book_history[0], book_history[-1]
+        years_apart = int(last['year']) - int(first['year'])
+        if years_apart > 0:
+            candidate = (last['book_equity'] / first['book_equity']) ** (1 / years_apart) - 1
+            if np.isfinite(candidate) and candidate > -1:
+                historical_book_growth = float(candidate)
+
+    if forecast_growth_rate is not None and not np.isfinite(forecast_growth_rate):
+        forecast_growth_rate = None
+    if terminal_growth_rate is not None and not np.isfinite(terminal_growth_rate):
+        terminal_growth_rate = None
+    if forecast_growth_rate is not None:
+        book_growth = forecast_growth_rate
+        book_growth_source = 'user_input'
+    elif historical_book_growth is not None and historical_book_growth <= 1:
+        book_growth = historical_book_growth
+        book_growth_source = 'historical_book_equity_cagr'
+    else:
+        book_growth = 0.0
+        book_growth_source = 'flat_book_growth_fallback'
+
+    stable_growth_fallback = min(0.03, max(0.0, cost_of_equity - 0.01)) if cost_of_equity is not None else 0.03
+    if terminal_growth_rate is not None:
+        stable_growth = terminal_growth_rate
+        stable_growth_source = 'user_input'
+    elif historical_book_growth is not None and cost_of_equity is not None and -1 < historical_book_growth < cost_of_equity:
+        stable_growth = historical_book_growth
+        stable_growth_source = 'historical_book_equity_cagr'
+    else:
+        stable_growth = stable_growth_fallback
+        stable_growth_source = 'stable_growth_fallback'
+
+    valid_roes = [float(row['roe']) for row in history if isinstance(row.get('roe'), (int, float))
+                  and np.isfinite(row['roe'])]
+    current_roe = capital.get('current_roe')
+    if not isinstance(current_roe, (int, float)) or not np.isfinite(current_roe) or current_roe == 0:
+        current_roe = valid_roes[-1] if valid_roes else None
+    stable_roe = float(np.median(valid_roes[-5:])) if valid_roes else None
+
+    market_pb = None
+    if market_cap is not None and book_equity is not None and book_equity > 0:
+        market_pb = market_cap / book_equity
+    elif capital.get('market_pb') is not None:
+        market_pb = capital.get('market_pb')
+    book_value_per_share = book_equity / shares if book_equity is not None and shares is not None and shares > 0 else None
+    implied_stable_pb = None
+    stable_value_per_share = None
+    if cost_of_equity is not None and stable_roe is not None and stable_growth < cost_of_equity and stable_roe > stable_growth:
+        implied_stable_pb = (stable_roe - stable_growth) / (cost_of_equity - stable_growth)
+        if book_value_per_share is not None:
+            stable_value_per_share = book_value_per_share * implied_stable_pb
+
+    bank_dcf = {
+        'status': 'not_calculated',
+        'forecast_years': 5,
+        'book_equity': book_equity,
+        'book_equity_as_of': capital.get('book_equity_as_of'),
+        'book_value_per_share': book_value_per_share,
+        'forecast_book_growth': book_growth,
+        'forecast_book_growth_source': book_growth_source,
+        'terminal_growth_rate': stable_growth,
+        'terminal_growth_source': stable_growth_source,
+        'historical_book_growth': historical_book_growth,
+        'forecast_roe_start': current_roe,
+        'stable_roe': stable_roe,
+        'cost_of_equity': cost_of_equity,
+        'equity_value': None,
+        'intrinsic_value_per_share': None,
+        'current_share_price': current_price,
+        'upside': None,
+        'fair_pb_residual_income': None,
+        'fair_pb_stable_state': implied_stable_pb,
+        'stable_value_per_share': stable_value_per_share,
+        'market_pb': market_pb,
+        'missing_inputs': [],
+        'message': None
+    }
+
+    missing = []
+    if book_equity is None or book_equity <= 0:
+        missing.append('thiếu vốn chủ sở hữu sổ sách dương')
+    if shares is None or shares <= 0:
+        missing.append('thiếu số cổ phiếu lưu hành ước tính')
+    if current_roe is None:
+        missing.append('thiếu ROE hiện tại/lịch sử')
+    if stable_roe is None:
+        missing.append('thiếu dữ liệu ROE để ước tính ROE ổn định')
+    if cost_of_equity is None:
+        missing.append('thiếu beta, Rf hoặc ERP để tính chi phí vốn chủ')
+    elif cost_of_equity <= -1:
+        missing.append('chi phí vốn chủ phải lớn hơn -100%')
+    if book_growth <= -1 or book_growth > 1:
+        missing.append('g vốn chủ 5 năm phải lớn hơn -100% và không quá 100%')
+    if stable_growth <= -1 or stable_growth > 1:
+        missing.append('g dài hạn phải lớn hơn -100% và không quá 100%')
+    elif cost_of_equity is not None and stable_growth >= cost_of_equity:
+        missing.append('g dài hạn phải thấp hơn chi phí vốn chủ')
+
+    if not missing:
+        equity = float(book_equity)
+        present_value_residual_income = 0.0
+        for year in range(1, 6):
+            year_roe = float(current_roe) + (float(stable_roe) - float(current_roe)) * year / 5
+            beginning_book_equity = equity * (1 + float(book_growth)) ** (year - 1)
+            residual_income = (year_roe - float(cost_of_equity)) * beginning_book_equity
+            present_value_residual_income += residual_income / (1 + float(cost_of_equity)) ** year
+
+        ending_book_equity = equity * (1 + float(book_growth)) ** 5
+        terminal_residual_income = (float(stable_roe) - float(cost_of_equity)) * ending_book_equity
+        terminal_value = terminal_residual_income / (float(cost_of_equity) - float(stable_growth))
+        intrinsic_equity_value = equity + present_value_residual_income + terminal_value / (1 + float(cost_of_equity)) ** 5
+        intrinsic_per_share = intrinsic_equity_value / float(shares)
+        bank_dcf['equity_value'] = intrinsic_equity_value
+        bank_dcf['intrinsic_value_per_share'] = intrinsic_per_share
+        bank_dcf['fair_pb_residual_income'] = intrinsic_equity_value / equity
+        if current_price is not None and current_price > 0:
+            bank_dcf['upside'] = intrinsic_per_share / float(current_price) - 1
+        bank_dcf['status'] = 'ready' if bank_dcf['upside'] is not None else 'partial'
+
+    bank_dcf['missing_inputs'] = missing
+    notes = ['Định giá lợi nhuận thặng dư: vốn chủ sổ sách + giá trị hiện tại của (ROE − chi phí vốn chủ) × vốn chủ đầu kỳ.']
+    if book_growth_source == 'flat_book_growth_fallback':
+        notes.append('Không đủ chuỗi vốn chủ để suy ra g 5 năm nên dùng giả định vốn chủ tăng 0%; có thể nhập g để ghi đè.')
+    elif book_growth_source == 'historical_book_equity_cagr':
+        notes.append('g vốn chủ 5 năm lấy từ CAGR vốn chủ sổ sách lịch sử; đây là đại diện cho tăng trưởng vốn chủ, không phải dự báo lợi nhuận.')
+    if stable_growth_source == 'stable_growth_fallback':
+        notes.append(f'g dài hạn dùng giả định ổn định {stable_growth:.1%} vì CAGR vốn chủ không phù hợp hoặc không thấp hơn chi phí vốn chủ; có thể nhập để ghi đè.')
+    if missing:
+        notes.append('Chưa tính được giá trị nội tại: ' + '; '.join(missing) + '.')
+    elif bank_dcf['status'] == 'partial':
+        notes.append('Đã tính giá trị vốn chủ; chưa có giá thị trường để tính chênh lệch.')
+    else:
+        notes.append('Giá trị mỗi cổ phiếu là ước tính theo số cổ phiếu từ vốn hóa/giá hiện tại.')
+    bank_dcf['message'] = ' '.join(notes)
+
+    valuation['cost_of_equity'] = {
+        'beta': beta,
+        'risk_free_rate': risk_free_rate,
+        'risk_free_rate_source': risk_free_source,
+        'risk_free_rate_as_of': risk_free_as_of,
+        'equity_risk_premium': equity_risk_premium,
+        'equity_risk_premium_source': erp_source,
+        'equity_risk_premium_as_of': erp_as_of,
+        'value': cost_of_equity
+    }
+    valuation['bank_valuation'] = bank_dcf
+    valuation['status'] = bank_dcf['status']
 
 def get_top_market_cap(tickers, limit=20):
     """ Lấy danh sách Top mã (ưu tiên vốn hóa lớn nhất) bằng cách đối chiếu với VN100. Tốc độ ánh sáng, không gọi API tài chính. """
@@ -788,6 +1732,10 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
             
             f_bs = Finance(symbol=ticker, source='VCI')
             df_bs = f_bs.balance_sheet(period='year')
+            try:
+                df_bs_q = f_bs.balance_sheet(period='quarter')
+            except Exception:
+                df_bs_q = None
             
             if df_ratio is None or df_ratio.empty:
                 return None
@@ -806,6 +1754,7 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
             latest_year = int(match.group(0))
             
             history = []
+            bank_valuation_history = []
             num_years = min(len(years_cols), 5)
                 
             for i in range(num_years):
@@ -830,6 +1779,27 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
                 
                 value_ratio = (roe / pb) if pb and pb > 0 and roe else 0.0
 
+                def _ratio_as_decimal(value):
+                    if value is None:
+                        return None
+                    numeric = float(value)
+                    return numeric / 100 if abs(numeric) > 1 else numeric
+
+                roe_raw = _optional_row_value(df_ratio, ["ROE", "lợi nhuận trên vốn chủ sở hữu"], ratio_year_str)
+                roa_raw = _optional_row_value(df_ratio, ["ROAA", "ROA", "sinh lợi trên tổng tài sản"], ratio_year_str)
+                nim_raw = _optional_row_value(df_ratio, ["NIM", "lãi thuần", "thu nhập lãi thuần"], ratio_year_str)
+                book_period_col = _period_column(df_bs, target_year_str) or target_year_str
+                book_equity = _optional_row_value(df_bs, [
+                    'Vốn chủ sở hữu của cổ đông công ty mẹ', 'Vốn chủ sở hữu',
+                    'Tổng vốn chủ sở hữu', 'Total shareholders equity', 'Shareholders equity'
+                ], book_period_col)
+                npl_raw = _optional_row_value(df_ratio, [
+                    'Tỷ lệ nợ xấu', 'Nợ xấu / Tổng dư nợ', 'NPL', 'Non-performing loan ratio'
+                ], ratio_year_str)
+                car_raw = _optional_row_value(df_ratio, [
+                    'Tỷ lệ an toàn vốn', 'CAR', 'Capital adequacy ratio'
+                ], ratio_year_str)
+
                 history.append({
                     'year': target_year_str,
                     'roa': float(roa) if roa else 0.0,
@@ -839,8 +1809,20 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
                     'roe': float(roe) if roe else 0.0,
                     'value_ratio': float(value_ratio)
                 })
+                bank_valuation_history.append({
+                    'year': int(target_year_str),
+                    'book_equity': float(book_equity) if book_equity is not None else None,
+                    'roe': _ratio_as_decimal(roe_raw),
+                    'roa': _ratio_as_decimal(roa_raw),
+                    'nim': _ratio_as_decimal(nim_raw),
+                    'npl_ratio': _ratio_as_decimal(npl_raw),
+                    'capital_adequacy_ratio': _ratio_as_decimal(car_raw),
+                    'pb': float(pb) if pb is not None else None,
+                    'pe': float(pe) if pe is not None else None
+                })
             
             history.reverse()
+            bank_valuation_history.reverse()
             
             try:
                 df_ratio_q = Finance(symbol=ticker, source='KBS').ratio(period='quarter')
@@ -853,12 +1835,12 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
             latest_y_str = str(history[-1]['year']) if history else ""
                 
             roa_q = get_latest_q_value(df_ratio_q, ["ROA bình quân 4 quý", "roa_trailling", "ROAA", "ROA", "sinh lợi trên tổng tài sản"])
-            if roa_q == 0: roa_q = history[-1].get('roa', 0) if history else 0
-            if roa_q: roa_q = roa_q / 100
+            if roa_q == 0: roa_q = history[-1].get('roa', 0) * 100 if history else 0
+            if roa_q: roa_q = _ratio_as_decimal(roa_q)
                 
             roe_q = get_latest_q_value(df_ratio_q, ["ROE bình quân 4 quý", "roe_trailling", "ROEA", "ROE", "lợi nhuận trên vốn chủ sở hữu"])
-            if roe_q == 0: roe_q = history[-1].get('roe', 0) if history else 0
-            if roe_q: roe_q = roe_q / 100
+            if roe_q == 0: roe_q = history[-1].get('roe', 0) * 100 if history else 0
+            if roe_q: roe_q = _ratio_as_decimal(roe_q)
             
             nim_q = get_latest_q_value(df_ratio_q, ["NIM", "lãi thuần", "thu nhập lãi thuần"])
             if nim_q != 0:
@@ -869,6 +1851,24 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
                 
             pb_q = get_latest_q_value(df_ratio_q, ["P/B", "giá trị sổ sách (P/B)"])
             if pb_q == 0: pb_q = history[-1].get('pb', 0) if history else 0
+
+            latest_bs_q_col = _quarter_columns(df_bs_q)[0] if df_bs_q is not None and not df_bs_q.empty else None
+            current_book_equity = _optional_row_value(df_bs_q, [
+                'Vốn chủ sở hữu của cổ đông công ty mẹ', 'Vốn chủ sở hữu',
+                'Tổng vốn chủ sở hữu', 'Total shareholders equity', 'Shareholders equity'
+            ], latest_bs_q_col) if latest_bs_q_col else None
+            current_book_as_of = latest_bs_q_col if current_book_equity is not None else None
+            if current_book_equity is None:
+                current_book_equity = next((item['book_equity'] for item in reversed(bank_valuation_history)
+                                            if item['book_equity'] is not None and item['book_equity'] > 0), None)
+                current_book_as_of = str(next((item['year'] for item in reversed(bank_valuation_history)
+                                               if item['book_equity'] is not None and item['book_equity'] > 0), '')) or None
+
+            market_equity = _market_cap_to_vnd(market_cap_overview)
+            current_price_value = float(current_price) if current_price and float(current_price) > 0 else None
+            shares_estimate = market_equity / current_price_value if market_equity is not None and current_price_value else None
+            current_market_pb = market_equity / current_book_equity if market_equity is not None and current_book_equity and current_book_equity > 0 else (float(pb_q) if pb_q else None)
+            current_roe = float(roe_q) if roe_q else (bank_valuation_history[-1]['roe'] if bank_valuation_history else None)
             
             value_ratio_q = (roe_q / pb_q) if pb_q and pb_q > 0 else 0
             equity_ratio_q = (roa_q / roe_q) if roe_q and roe_q > 0 else 0
@@ -888,7 +1888,26 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
                     'Latest_Quarter': latest_q_str,
                     'Latest_Year': latest_y_str
                 },
-                'history': history
+                'history': history,
+                'valuation_inputs': {
+                    'model': 'bank_residual_income',
+                    'status': 'partial',
+                    'financial_statement_source': 'Vnstock VCI / KBS',
+                    'history': bank_valuation_history,
+                    'capital_structure': {
+                        'book_equity': current_book_equity,
+                        'book_equity_as_of': current_book_as_of,
+                        'market_equity_value': market_equity,
+                        'current_share_price': current_price_value,
+                        'shares_outstanding_estimate': shares_estimate,
+                        'shares_estimate_basis': 'market_cap_divided_by_current_price' if shares_estimate is not None else None,
+                        'market_pb': current_market_pb,
+                        'current_roe': current_roe
+                    },
+                    'cost_of_equity': {},
+                    'bank_valuation': {},
+                    'message': 'Ngân hàng được định giá theo lợi nhuận thặng dư trên vốn chủ sở hữu; không dùng FCFF/WACC doanh nghiệp thông thường.'
+                }
             }
             
         elif sector.lower() in ['chứng khoán', 'securities', 'dịch vụ tài chính', 'dịch vụ tài chính (mở rộng)', 'financial services']:
@@ -981,7 +2000,13 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
                     'Latest_Quarter': latest_q_str,
                     'Latest_Year': latest_y_str
                 },
-                'history': history
+                'history': history,
+                'valuation_inputs': {
+                    'model': 'sector_specific',
+                    'status': 'not_applicable',
+                    'message': 'Công ty chứng khoán cần mô hình định giá theo vốn chủ sở hữu và chỉ tiêu ngành; FCFF/NWC và WACC doanh nghiệp thông thường không áp dụng trực tiếp.',
+                    'sector_metrics': ['ROE', 'P/B', 'P/E', 'tỷ lệ vốn chủ sở hữu']
+                }
             }
 
             
@@ -1102,6 +2127,26 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
         except:
             df_cf_q, df_is_q, df_bs_q, df_ratio_q = None, None, None, None
 
+        if any(label in sector.lower() for label in ('bảo hiểm', 'insurance')):
+            valuation_inputs = {
+                'model': 'sector_specific',
+                'status': 'not_applicable',
+                'message': 'Doanh nghiệp bảo hiểm cần mô hình định giá theo vốn chủ sở hữu và dự phòng bảo hiểm; FCFF/NWC doanh nghiệp thông thường không áp dụng trực tiếp.',
+                'sector_metrics': ['ROE', 'ROA', 'biên khả năng thanh toán', 'dự phòng nghiệp vụ']
+            }
+        else:
+            valuation_inputs = _build_nonfinancial_valuation_inputs(
+                df_is=df_is,
+                df_cf=df_cf,
+                df_bs=df_bs,
+                years_cols=years_cols,
+                market_cap=market_cap_overview,
+                current_price=current_price,
+                tax_rate_fallback=tax_rate_fallback,
+                df_is_q=df_is_q,
+                df_bs_q=df_bs_q
+            )
+
         roic_ttm = 0
         cfo_quality_ttm = 0
         de_current = 0
@@ -1169,7 +2214,8 @@ def get_stock_report(ticker, tax_rate_fallback=0.2):
                 'Latest_Quarter': latest_q_str,
                 'Latest_Year': str(history[-1]['year']) if history else ""
             },
-            'history': history
+            'history': history,
+            'valuation_inputs': valuation_inputs
         }
     except Exception as e:
         try:
@@ -1208,7 +2254,9 @@ def get_sector_medians(sector):
             pass
     return {}
 
-def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
+def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2,
+                           risk_free_rate=None, equity_risk_premium=None,
+                           forecast_growth_rate=None, terminal_growth_rate=None):
     import re
     import numpy as np
     import pandas as pd
@@ -1234,6 +2282,27 @@ def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
             
     if main_ticker not in reports:
         return {'status': 'error', 'detail': f'Không tìm thấy dữ liệu cho mã chính {main_ticker}'}
+
+    main_valuation = reports[main_ticker].get('valuation_inputs')
+    if main_valuation and main_valuation.get('model') == 'bank_residual_income':
+        _calculate_bank_residual_income(
+            main_valuation,
+            main_ticker,
+            risk_free_rate,
+            equity_risk_premium,
+            forecast_growth_rate,
+            terminal_growth_rate
+        )
+    else:
+        _calculate_wacc_inputs(
+            main_valuation,
+            main_ticker,
+            risk_free_rate,
+            equity_risk_premium,
+            tax_rate_fallback,
+            forecast_growth_rate,
+            terminal_growth_rate
+        )
         
     rank_data = []
     is_bank = False
@@ -1383,6 +2452,9 @@ def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
         import math
         import pandas as pd
         import numpy as np
+
+        if obj is None:
+            return None
         
         if isinstance(obj, dict):
             return {k: sanitize(v) for k, v in obj.items()}
@@ -1394,14 +2466,14 @@ def get_comparative_report(main_ticker, peers_str="", tax_rate_fallback=0.2):
             
         try:
             if pd.isna(obj):
-                return 0
+                return None
         except Exception:
             pass
             
         try:
             if isinstance(obj, (float, np.floating)):
                 if np.isinf(obj) or np.isnan(obj):
-                    return 0
+                    return None
                 return float(obj)
             elif isinstance(obj, (int, np.integer)):
                 return int(obj)

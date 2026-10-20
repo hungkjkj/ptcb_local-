@@ -62,11 +62,42 @@ document.addEventListener('DOMContentLoaded', async () => {
             const response = await fetch(`/api/screener?sector=${encodeURIComponent(sector)}`);
             if (!response.ok) throw new Error('API server error');
             const data = await response.json();
+            const rows = Array.isArray(data.data) ? data.data : [];
 
             const tbody = document.getElementById(`tbody-${elementId}`);
             tbody.innerHTML = '';
+
+            const calculateMedian = (values) => {
+                const sorted = values
+                    .filter(value => typeof value === 'number' && Number.isFinite(value))
+                    .sort((a, b) => a - b);
+                if (sorted.length === 0) return null;
+                const middle = Math.floor(sorted.length / 2);
+                return sorted.length % 2
+                    ? sorted[middle]
+                    : (sorted[middle - 1] + sorted[middle]) / 2;
+            };
+
+            const medianFor = (field, cachedField, includeZero = false) => {
+                const cachedValue = cachedField && data.medians?.[cachedField];
+                if (typeof cachedValue === 'number' && Number.isFinite(cachedValue)) {
+                    return cachedValue;
+                }
+
+                const values = rows
+                    .map(row => row[field])
+                    .filter(value => includeZero || value !== 0);
+                return calculateMedian(values);
+            };
+
+            const scoreMedian = calculateMedian(rows.map(row => {
+                const score = row['Total Score'] ?? row.Total_Score;
+                return typeof score === 'number' ? score : null;
+            }));
+            const medianLabel = '<td colspan="2" class="median-label">TRUNG VỊ</td>';
+            const medianScoreCell = `<td class="median-score">${scoreMedian === null ? '-' : scoreMedian.toFixed(1)}</td>`;
             
-            if (data.data && data.data.length > 0) {
+            if (rows.length > 0) {
                 const isBank = sector.toLowerCase().includes('ngân hàng') || sector.toLowerCase().includes('bank');
                 const isSecurities = sector.toLowerCase().includes('chứng khoán') || sector.toLowerCase().includes('securities') || sector.toLowerCase().includes('dịch vụ tài chính');
                 
@@ -111,7 +142,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 thead.innerHTML = headers;
 
-                data.data.forEach((r, idx) => {
+                rows.forEach((r, idx) => {
                     const t = r.ticker || r.Ticker || r.TICKER;
                     const score = r['Total Score'] || r.Total_Score || 0;
                     
@@ -166,9 +197,51 @@ document.addEventListener('DOMContentLoaded', async () => {
                         `;
                     }
                 });
-            } else if (data.status === 'syncing' && (!data.data || data.data.length === 0)) {
+
+                if (isBank) {
+                    const roa = medianFor('ROA', 'median_roa');
+                    const nim = medianFor('NIM', 'median_nim');
+                    const value = medianFor('Value_Ratio', 'median_value');
+                    const eq = medianFor('Equity_Ratio', 'median_eq');
+                    tbody.insertAdjacentHTML('afterbegin', `
+                        <tr class="sector-median-row">
+                            ${medianLabel}${medianScoreCell}
+                            <td>${roa === null ? '-' : (roa * 100).toFixed(1) + '%'}</td>
+                            <td>${nim === null ? '-' : (nim * 100).toFixed(1) + '%'}</td>
+                            <td>${value === null ? '-' : (value * 100).toFixed(1)}</td>
+                            <td>${eq === null ? '-' : (eq * 100).toFixed(1) + '%'}</td>
+                        </tr>
+                    `);
+                } else if (isSecurities) {
+                    const pb = medianFor('PB', 'median_pb');
+                    const pe = medianFor('PE', 'median_pe');
+                    const roeTtm = medianFor('ROE_TTM', 'median_roe_ttm');
+                    const eq = medianFor('Equity_Ratio', 'median_eq');
+                    tbody.insertAdjacentHTML('afterbegin', `
+                        <tr class="sector-median-row">
+                            ${medianLabel}${medianScoreCell}
+                            <td>${pb === null ? '-' : pb.toFixed(2)}</td>
+                            <td>${pe === null ? '-' : pe.toFixed(1)}</td>
+                            <td>${roeTtm === null ? '-' : (roeTtm * 100).toFixed(1) + '%'}</td>
+                            <td>${eq === null ? '-' : eq.toFixed(1) + 'x'}</td>
+                        </tr>
+                    `);
+                } else {
+                    const roic = medianFor('ROIC_TTM', 'median_roic_ttm');
+                    const cfo = medianFor('CFO_Quality_TTM', 'median_cfo_ttm');
+                    const value = medianFor('Value_Ratio', 'median_value');
+                    tbody.insertAdjacentHTML('afterbegin', `
+                        <tr class="sector-median-row">
+                            ${medianLabel}${medianScoreCell}
+                            <td>${roic === null ? '-' : (roic * 100).toFixed(1) + '%'}</td>
+                            <td>${cfo === null ? '-' : cfo.toFixed(2)}</td>
+                            <td>${value === null ? '-' : value.toFixed(1)}</td>
+                        </tr>
+                    `);
+                }
+            } else if (data.status === 'syncing' && rows.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="7" style="padding: 20px; text-align: center; color: #f59e0b;"><i class="fas fa-spinner fa-spin"></i> Đang tải dữ liệu...</td></tr>`;
-            } else if (data.status !== 'syncing' && (!data.data || data.data.length === 0)) {
+            } else if (data.status !== 'syncing' && rows.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #94a3b8;">Không có dữ liệu hoặc lỗi.</td></tr>`;
             }
 

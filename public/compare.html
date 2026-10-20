@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AlphaQuant - Quant Screener</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=13">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -31,12 +31,22 @@
                 <input type="text" id="ticker-input" placeholder="Nhập mã CP (VD: FPT)" style="padding-left: 2.5rem; text-transform: uppercase;">
             </div>
             <div class="peer-inputs-container" style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-                <span style="color: #94a3b8; font-size: 0.9rem;"><i class="fas fa-percent"></i> Thuế:</span>
+                <span style="color: #94a3b8; font-size: 0.9rem;"><i class="fas fa-percent"></i> Thuế suất (0–1):</span>
                 <input type="number" id="tax-rate-input" placeholder="0.2" step="0.01" min="0" max="1" style="width: 60px; text-align: center; padding: 0.75rem 0.5rem;">
                 <span style="color: #94a3b8; font-size: 0.9rem; margin-left: 0.5rem;"><i class="fas fa-users"></i> Đối thủ:</span>
                 <input type="text" class="peer-input" placeholder="Mã 1" style="width: 70px; text-transform: uppercase; text-align: center; padding: 0.75rem 0.5rem;">
                 <input type="text" class="peer-input" placeholder="Mã 2" style="width: 70px; text-transform: uppercase; text-align: center; padding: 0.75rem 0.5rem;">
                 <input type="text" class="peer-input" placeholder="Mã 3" style="width: 70px; text-transform: uppercase; text-align: center; padding: 0.75rem 0.5rem;">
+            </div>
+            <div class="valuation-assumptions-inputs">
+                <label for="risk-free-rate-input" title="Lợi suất trái phiếu Chính phủ Việt Nam kỳ hạn 10 năm, nhập theo phần trăm.">Rf (%)</label>
+                <input type="number" id="risk-free-rate-input" placeholder="nhập HNX 10Y" step="0.01" min="0" max="100" aria-label="Lãi suất phi rủi ro theo phần trăm">
+                <label for="market-risk-premium-input" title="ERP tổng của Việt Nam, nhập theo phần trăm.">ERP (%)</label>
+                <input type="number" id="market-risk-premium-input" placeholder="tự lấy / ghi đè" step="0.01" min="0" max="100" aria-label="Phần bù rủi ro thị trường theo phần trăm">
+                <label for="forecast-growth-input" title="Để trống để tự tính từ các năm FCFF dương hợp lệ; năm thiếu được bỏ qua. Nhập số để ghi đè.">g 5 năm (%)</label>
+                <input type="number" id="forecast-growth-input" placeholder="tự tính / ghi đè" step="0.1" min="-99.9" max="100" aria-label="Tăng trưởng FCFF trong 5 năm; để trống để tự tính">
+                <label for="terminal-growth-input" title="Để trống để dùng CAGR FCFF lịch sử; nếu CAGR không thấp hơn WACC, hệ thống dùng kịch bản 0%. Nhập số để ghi đè.">g dài hạn (%)</label>
+                <input type="number" id="terminal-growth-input" placeholder="tự tính / ghi đè" step="0.1" min="-99.9" max="100" aria-label="Tăng trưởng FCFF dài hạn; để trống để tự tính">
             </div>
             <button id="run-btn">
                 <span class="btn-text">Phân tích</span>
@@ -77,6 +87,10 @@
             <div class="summary-cards" id="summary-cards">
                 <!-- Summary will be injected here -->
             </div>
+
+            <section class="valuation-inputs-panel glass" id="valuation-inputs-container" style="display: none;">
+                <!-- FCFF/WACC inputs are injected here -->
+            </section>
             
             <div class="charts-grid">
                 <div class="chart-wrapper">
@@ -107,6 +121,6 @@
         </div>
     </div>
 
-    <script src="script.js?v=9"></script>
+    <script src="script.js?v=16"></script>
 </body>
 </html>
